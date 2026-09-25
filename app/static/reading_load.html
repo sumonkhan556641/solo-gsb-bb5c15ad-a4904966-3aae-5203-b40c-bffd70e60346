@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>阅读负荷热区</title>
+<style>
+  :root {
+    --bg: #f4f6fa;
+    --card: #ffffff;
+    --border: #d9dee8;
+    --text: #1f2733;
+    --muted: #6b7686;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --danger: #dc2626;
+    --danger-bg: #fef2f2;
+    --warn-bg: #fffbeb;
+    --warn-border: #f59e0b;
+    --ok-bg: #f0fdf4;
+    --ok-border: #16a34a;
+    --heat-bg: #fff7ed;
+    --heat-border: #fb923c;
+    --heat-strong: #ea580c;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .nav { margin: 0 0 16px; font-size: 14px; }
+  .nav a { color: var(--primary); text-decoration: none; margin-right: 16px; }
+  .nav a:hover { text-decoration: underline; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  .hint { color: var(--muted); font-weight: 400; font-size: 13px; }
+  textarea {
+    width: 100%;
+    min-height: 220px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: 13px/1.6 var(--mono);
+    resize: vertical;
+  }
+  textarea:focus, input:focus { outline: 2px solid rgba(37, 99, 235, .35); border-color: var(--primary); }
+  input[type="number"] {
+    width: 150px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font: 14px var(--mono);
+  }
+  button {
+    border: 1px solid var(--border);
+    background: #fff;
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:hover { background: #f1f4f9; }
+  button.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+    font-weight: 600;
+    padding: 10px 22px;
+  }
+  button.primary:hover { background: var(--primary-hover); }
+  .toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+  .alert {
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    white-space: pre-wrap;
+  }
+  .alert.error { background: var(--danger-bg); border: 1px solid var(--danger); color: var(--danger); }
+  .alert.warn { background: var(--warn-bg); border: 1px solid var(--warn-border); color: #92400e; }
+  .alert.ok { background: var(--ok-bg); border: 1px solid var(--ok-border); color: #166534; }
+  .hidden { display: none; }
+  table.cues { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+  table.cues th, table.cues td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+  table.cues th { background: #f8fafc; }
+  table.cues td.num { width: 44px; color: var(--muted); text-align: right; }
+  table.cues td.tc { font-family: var(--mono); white-space: nowrap; }
+  table.cues td.rate { font-family: var(--mono); text-align: right; white-space: nowrap; }
+  tr.inzone td { background: var(--heat-bg); }
+  tr.inzone { box-shadow: inset 3px 0 0 var(--heat-strong); }
+  .badge { display: inline-block; border-radius: 999px; padding: 1px 10px; font-size: 12px; font-weight: 600; }
+  .badge.heat { background: var(--heat-bg); color: var(--heat-strong); border: 1px solid var(--heat-border); margin: 0 4px 2px 0; }
+  .timeline {
+    position: relative;
+    height: 38px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background:
+      repeating-linear-gradient(to right, #eef1f6 0, #eef1f6 1px, transparent 1px, transparent 10%);
+    margin: 8px 0 6px;
+  }
+  .zonebar {
+    position: absolute;
+    top: 6px;
+    height: 24px;
+    background: rgba(251, 146, 60, .55);
+    border: 1px solid var(--heat-strong);
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: var(--mono);
+    color: #7c2d12;
+    line-height: 22px;
+    text-align: center;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .zonebar:hover { background: rgba(234, 88, 12, .75); color: #fff; }
+  .scale { display: flex; justify-content: space-between; font: 11px var(--mono); color: var(--muted); }
+  .chips span { cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="nav">
+    <a href="/">← 时间漂移校正</a>
+    <a href="/placement">字幕位置规划</a>
+    <a href="/terms">字幕专名统一</a>
+    <a href="/wrap">字幕智能断行</a>
+    <a href="/chapters">字幕章节规划</a>
+    <a href="/topic-clip">主题短片段检索</a>
+    <a href="/bilingual-align">双语字幕配对</a>
+    <a href="/selection">重叠字幕择优保留</a>
+    <a href="/cut-rejoin">删段后字幕接轴</a>
+  </p>
+  <h1>阅读负荷热区</h1>
+  <p class="sub">粘贴 SRT，按“去 Unicode 空白后的字符数 ÷ 显示秒数”计算每条字幕的阅读速率；
+    重叠字幕的速率相加，按起止事件精确扫描时间轴（不做整秒采样），找出合计速率
+    <strong>严格超过</strong>阈值且连续时长达到下限的热区，相接热区自动合并。</p>
+
+  <div class="card">
+    <label for="srt">原始 SRT 字幕</label>
+    <textarea id="srt" placeholder="1&#10;00:00:05,000 --> 00:00:08,000&#10;第一句字幕&#10;&#10;2&#10;00:00:07,000 --> 00:00:11,000&#10;重叠的第二句字幕"></textarea>
+  </div>
+
+  <div class="card">
+    <label for="threshold">阅读速率阈值（字/秒，正数）</label>
+    <input type="number" id="threshold" min="0" step="any" value="5">
+    <span class="hint">合计速率严格超过该值的时间段才计入热区，例如 5、4.5。</span>
+    <div class="toolbar" style="margin-top:12px;">
+      <div>
+        <label for="minDuration">最短持续时长（毫秒，非负整数）</label>
+        <input type="number" id="minDuration" min="0" step="1" value="500">
+        <span class="hint">相接的超阈值分段先合并，连续时长达到该值才作为热区返回。</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="errorBox" class="alert error hidden"></div>
+  <div id="warnBox" class="alert warn hidden"></div>
+
+  <div class="toolbar" style="margin-bottom: 20px;">
+    <button type="button" class="primary" id="submit">分析热区</button>
+    <button type="button" id="fillExample">填入示例</button>
+    <span class="hint" id="status"></span>
+  </div>
+
+  <div id="resultCard" class="card hidden">
+    <h2>分析结果</h2>
+    <div id="okBox" class="alert ok hidden"></div>
+    <div class="toolbar" style="margin-top:0;">
+      <button type="button" class="primary" id="download">下载结果 JSON</button>
+      <span class="hint">下载内容与页面结果为接口返回的同一份 JSON。</span>
+    </div>
+
+    <h2 style="margin-top:18px;">热区时间轴</h2>
+    <div class="timeline" id="timeline"></div>
+    <div class="scale"><span id="scaleStart">00:00:00,000</span><span id="scaleEnd"></span></div>
+
+    <h2 style="margin-top:18px;">热区明细 <span class="hint">点击热区编号 / 色块可高亮下方参与字幕</span></h2>
+    <table class="cues" id="zoneTable">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>开始</th>
+          <th>结束</th>
+          <th>持续(ms)</th>
+          <th>峰值速率(字/秒)</th>
+          <th>参与字幕输入序号</th>
+        </tr>
+      </thead>
+      <tbody id="zoneRows"></tbody>
+    </table>
+
+    <h2 style="margin-top:18px;">逐条字幕 <span class="hint">橙色底纹表示该字幕参与至少一个热区</span></h2>
+    <table class="cues">
+      <thead>
+        <tr>
+          <th>输入序号</th>
+          <th>SRT 序号</th>
+          <th>时间轴</th>
+          <th>字数</th>
+          <th>时长(ms)</th>
+          <th>速率(字/秒)</th>
+          <th>文本</th>
+        </tr>
+      </thead>
+      <tbody id="cueTable"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+(function () {
+  const srtEl = document.getElementById("srt");
+  const thresholdEl = document.getElementById("threshold");
+  const minDurationEl = document.getElementById("minDuration");
+  const errorBox = document.getElementById("errorBox");
+  const warnBox = document.getElementById("warnBox");
+  const resultCard = document.getElementById("resultCard");
+  const cueTableEl = document.getElementById("cueTable");
+  const zoneRowsEl = document.getElementById("zoneRows");
+  const timelineEl = document.getElementById("timeline");
+  const scaleEndEl = document.getElementById("scaleEnd");
+  const okBox = document.getElementById("okBox");
+  const statusEl = document.getElementById("status");
+
+  function showError(message) {
+    errorBox.textContent = message;
+    errorBox.classList.remove("hidden");
+  }
+  function clearAlerts() {
+    errorBox.classList.add("hidden");
+    warnBox.classList.add("hidden");
+    okBox.classList.add("hidden");
+    errorBox.textContent = "";
+    warnBox.textContent = "";
+    okBox.textContent = "";
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+
+  // 与后端 format_timecode 一致：毫秒 -> HH:MM:SS,mmm
+  function formatTimecode(ms) {
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor(ms % 3600000 / 60000);
+    const s = Math.floor(ms % 60000 / 1000);
+    const milli = ms % 1000;
+    const pad = (n, w) => String(n).padStart(w, "0");
+    return pad(h, 2) + ":" + pad(m, 2) + ":" + pad(s, 2) + "," + pad(milli, 3);
+  }
+
+  let cueZoneMap = {};   // 输入序号 -> 参与的热区编号（1 起）
+  let timelineEnd = 0;
+
+  function highlightZone(zNo) {
+    for (const tr of cueTableEl.querySelectorAll("tr[data-order]")) {
+      const order = Number(tr.getAttribute("data-order"));
+      const inThis = (cueZoneMap[order] || []).includes(zNo);
+      tr.style.outline = inThis ? "2px solid var(--heat-strong)" : "";
+      tr.style.outlineOffset = "-2px";
+    }
+  }
+  function clearHighlight() {
+    for (const tr of cueTableEl.querySelectorAll("tr[data-order]")) tr.style.outline = "";
+  }
+
+  function render(data) {
+    cueZoneMap = {};
+    data.zones.forEach((z, i) => {
+      z.cue_orders.forEach(o => {
+        (cueZoneMap[o] = cueZoneMap[o] || []).push(i + 1);
+      });
+    });
+    timelineEnd = data.cues.reduce(
+      (mx, c) => Math.max(mx, parseTcToMs(c.end)), 0
+    );
+    scaleEndEl.textContent = formatTimecode(timelineEnd);
+
+    // 时间轴色块
+    timelineEl.innerHTML = "";
+    data.zones.forEach((z, i) => {
+      const startMs = parseTcToMs(z.start);
+      const endMs = parseTcToMs(z.end);
+      const bar = document.createElement("div");
+      bar.className = "zonebar";
+      bar.style.left = (startMs / timelineEnd * 100) + "%";
+      bar.style.width = Math.max((endMs - startMs) / timelineEnd * 100, 0.6) + "%";
+      bar.title = "热区 " + (i + 1) + "：" + z.start + " → " + z.end
+        + "，峰值 " + z.peak_rate + " 字/秒，参与序号 " + z.cue_orders.join(", ");
+      bar.textContent = "热区" + (i + 1);
+      bar.addEventListener("mouseenter", () => highlightZone(i + 1));
+      bar.addEventListener("mouseleave", clearHighlight);
+      timelineEl.appendChild(bar);
+    });
+
+    // 热区明细表
+    zoneRowsEl.innerHTML = data.zones.length ? data.zones.map((z, i) =>
+      '<tr class="inzone">' +
+      '<td class="num chips"><span class="badge heat" data-zone="' + (i + 1) +
+        '" title="高亮参与字幕">热区' + (i + 1) + "</span></td>" +
+      '<td class="tc">' + escapeHtml(z.start) + "</td>" +
+      '<td class="tc">' + escapeHtml(z.end) + "</td>" +
+      '<td class="rate">' + z.duration_ms + "</td>" +
+      '<td class="rate"><strong>' + z.peak_rate + "</strong></td>" +
+      '<td>' + z.cue_orders.map(o =>
+        '<span class="badge heat" data-zone="' + (i + 1) + '">#' + o + "</span>").join(" ") + "</td>" +
+      "</tr>"
+    ).join("") : '<tr><td colspan="6" class="hint">没有找到满足条件的热区。</td></tr>';
+    zoneRowsEl.querySelectorAll("[data-zone]").forEach(el => {
+      const zNo = Number(el.getAttribute("data-zone"));
+      el.addEventListener("mouseenter", () => highlightZone(zNo));
+      el.addEventListener("mouseleave", clearHighlight);
+    });
+
+    // 逐条字幕表
+    cueTableEl.innerHTML = data.cues.map(c => {
+      const zs = cueZoneMap[c.order] || [];
+      return '<tr data-order="' + c.order + '"' + (zs.length ? ' class="inzone"' : "") + ">" +
+        '<td class="num">' + c.order + "</td>" +
+        '<td class="num">' + escapeHtml(c.index) + "</td>" +
+        '<td class="tc">' + escapeHtml(c.start) + "<br>" + escapeHtml(c.end) + "</td>" +
+        '<td class="rate">' + c.char_count + "</td>" +
+        '<td class="rate">' + c.duration_ms + "</td>" +
+        '<td class="rate">' + c.rate.toFixed(2) +
+          (zs.length ? '<div class="chips">' + zs.map(z =>
+            '<span class="badge heat" data-zone="' + z + '">热区' + z + "</span>").join("") + "</div>" : "") +
+        "</td>" +
+        "<td>" + escapeHtml(c.text).replace(/\n/g, "<br>") + "</td>" +
+        "</tr>";
+    }).join("");
+    cueTableEl.querySelectorAll("[data-zone]").forEach(el => {
+      const zNo = Number(el.getAttribute("data-zone"));
+      el.style.cursor = "pointer";
+      el.addEventListener("mouseenter", () => highlightZone(zNo));
+      el.addEventListener("mouseleave", clearHighlight);
+    });
+  }
+
+  function parseTcToMs(tc) {
+    const m = /^(\d+):(\d{2}):(\d{2}),(\d{3})$/.exec(tc);
+    if (!m) return 0;
+    return Number(m[1]) * 3600000 + Number(m[2]) * 60000
+      + Number(m[3]) * 1000 + Number(m[4]);
+  }
+
+  const EXAMPLE_SRT =
+    "1\n00:00:00,000 --> 00:00:04,000\n大家好欢迎收看今天的晚间新闻节目\n\n" +
+    "2\n00:00:02,000 --> 00:00:06,000\n首先我们来关注一条刚刚收到的消息\n\n" +
+    "3\n00:00:05,000 --> 00:00:09,000\n与此同时气象台也发布了大风蓝色预警\n\n" +
+    "4\n00:00:12,000 --> 00:00:17,000\n稍后为您带来详细报道敬请关注\n";
+
+  document.getElementById("fillExample").addEventListener("click", () => {
+    srtEl.value = EXAMPLE_SRT;
+    thresholdEl.value = "5";
+    minDurationEl.value = "500";
+    clearAlerts();
+    resultCard.classList.add("hidden");
+  });
+
+  document.getElementById("submit").addEventListener("click", async () => {
+    clearAlerts();
+    resultCard.classList.add("hidden");
+    statusEl.textContent = "分析中…";
+
+    const rawThreshold = thresholdEl.value.trim();
+    const rawMin = minDurationEl.value.trim();
+    if (!/^\d+(\.\d+)?$/.test(rawThreshold) || Number(rawThreshold) <= 0) {
+      showError("阅读速率阈值必须是正数（字/秒），例如 5、4.5。");
+      statusEl.textContent = "";
+      return;
+    }
+    if (!/^\d+$/.test(rawMin)) {
+      showError("最短持续时长必须是非负整数毫秒，例如 0、500。");
+      statusEl.textContent = "";
+      return;
+    }
+
+    const body = {
+      srt: srtEl.value,
+      rate_threshold: Number(rawThreshold),
+      min_duration_ms: Number(rawMin)
+    };
+
+    try {
+      const resp = await fetch("/api/reading-load", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const rawText = await resp.text();
+      let data;
+      try { data = JSON.parse(rawText); }
+      catch (_e) { data = null; }
+      if (!resp.ok) {
+        showError((data && data.detail && data.detail.message) ||
+          ("请求失败（HTTP " + resp.status + "）"));
+        statusEl.textContent = "";
+        return;
+      }
+
+      // 下载的就是接口返回的同一份 JSON 原文
+      window.__readingLoadJson = rawText;
+      render(data);
+
+      if (data.zone_count === 0) {
+        warnBox.textContent =
+          "共解析 " + data.cue_count + " 条字幕，但没有合计速率严格超过 "
+          + data.rate_threshold + " 字/秒且连续时长达到 "
+          + data.min_duration_ms + " ms 的热区；可尝试降低阈值或最短时长。";
+        warnBox.classList.remove("hidden");
+      } else {
+        okBox.textContent =
+          "共解析 " + data.cue_count + " 条字幕，找到 " + data.zone_count
+          + " 个阅读负荷热区（阈值 " + data.rate_threshold + " 字/秒，最短时长 "
+          + data.min_duration_ms + " ms）。";
+        okBox.classList.remove("hidden");
+      }
+      resultCard.classList.remove("hidden");
+      statusEl.textContent = "";
+    } catch (err) {
+      showError("请求出错：" + err);
+      statusEl.textContent = "";
+    }
+  });
+
+  document.getElementById("download").addEventListener("click", () => {
+    const content = window.__readingLoadJson || "";
+    const blob = new Blob([content], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "reading-load.json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>字幕章节规划</title>
+<style>
+  :root {
+    --bg: #f4f6fa;
+    --card: #ffffff;
+    --border: #d9dee8;
+    --text: #1f2733;
+    --muted: #6b7686;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --danger: #dc2626;
+    --danger-bg: #fef2f2;
+    --ok-bg: #f0fdf4;
+    --ok-border: #16a34a;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .nav { margin: 0 0 16px; font-size: 14px; }
+  .nav a { color: var(--primary); text-decoration: none; margin-right: 16px; }
+  .nav a:hover { text-decoration: underline; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  .hint { color: var(--muted); font-weight: 400; font-size: 13px; }
+  textarea {
+    width: 100%;
+    min-height: 220px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: 13px/1.6 var(--mono);
+    resize: vertical;
+  }
+  textarea:focus, input:focus { outline: 2px solid rgba(37, 99, 235, .35); border-color: var(--primary); }
+  .params { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-end; }
+  .params .field { width: 240px; }
+  input[type="number"] {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font: 14px var(--mono);
+  }
+  button {
+    border: 1px solid var(--border);
+    background: #fff;
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:hover { background: #f1f4f9; }
+  button.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+    font-weight: 600;
+    padding: 10px 22px;
+  }
+  button.primary:hover { background: var(--primary-hover); }
+  .toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+  .alert {
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    white-space: pre-wrap;
+  }
+  .alert.error { background: var(--danger-bg); border: 1px solid var(--danger); color: var(--danger); }
+  .alert.ok { background: var(--ok-bg); border: 1px solid var(--ok-border); color: #166534; }
+  .hidden { display: none; }
+  table.cues { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+  table.cues th, table.cues td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+  table.cues th { background: #f8fafc; }
+  table.cues td.num { width: 48px; color: var(--muted); text-align: right; }
+  table.cues td.tc { font-family: var(--mono); white-space: nowrap; }
+  table.cues td.rate { font-family: var(--mono); text-align: right; white-space: nowrap; }
+  .preview {
+    width: 100%;
+    max-height: 320px;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: 12px/1.6 var(--mono);
+    background: #fafbfc;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="nav">
+    <a href="/">字幕时间漂移校正</a>
+    <a href="/placement">字幕位置规划</a>
+    <a href="/reading-load">阅读负荷热区</a>
+    <a href="/terms">字幕专名统一</a>
+    <a href="/wrap">字幕智能断行</a>
+    <a href="/topic-clip">主题短片段检索</a>
+    <a href="/bilingual-align">双语字幕配对</a>
+    <a href="/selection">重叠字幕择优保留</a>
+    <a href="/cut-rejoin">删段后字幕接轴</a>
+  </p>
+  <h1>字幕章节规划</h1>
+  <p class="sub">粘贴 SRT，填写章节数 K 与优选停顿毫秒数 P。系统按输入顺序把字幕切成 K 个非空连续章节：
+    仅在「前一条结束不晚于后一条开始」的位置允许切分；以整段总时长 / K 为目标时长，最小化各章时长偏差
+    的平方和与各切分处 max(0, P − 停顿间隔) 的平方和，同分时取切分点序列更靠前者。
+    无法切成 K 章时给出明确原因。</p>
+
+  <div class="card">
+    <label for="srt">原始 SRT 字幕</label>
+    <textarea id="srt" placeholder="1&#10;00:00:00,000 --> 00:00:04,000&#10;第一段内容&#10;&#10;2&#10;00:00:04,500 --> 00:00:08,000&#10;继续第一段"></textarea>
+  </div>
+
+  <div class="card">
+    <h2>切分参数
+      <span class="hint">切分点处的停顿间隔达到 P 毫秒即不再惩罚；K 不能超过字幕条数</span>
+    </h2>
+    <div class="params">
+      <div class="field">
+        <label for="chapterCount">章节数 K（正整数）</label>
+        <input type="number" id="chapterCount" min="1" step="1" value="3">
+      </div>
+      <div class="field">
+        <label for="preferredPause">优选停顿毫秒数 P（非负整数）</label>
+        <input type="number" id="preferredPause" min="0" step="1" value="1500">
+      </div>
+      <button type="button" id="fillExample">填入示例</button>
+    </div>
+  </div>
+
+  <div id="errorBox" class="alert error hidden"></div>
+
+  <div class="toolbar" style="margin-bottom: 20px;">
+    <button type="button" class="primary" id="submit">规划章节</button>
+    <span class="hint" id="status"></span>
+  </div>
+
+  <div id="resultCard" class="card hidden">
+    <h2>切分结果</h2>
+    <div id="okBox" class="alert ok hidden"></div>
+    <div class="toolbar" style="margin-top:0;">
+      <button type="button" class="primary" id="download">下载结果 JSON</button>
+      <span class="hint">下载内容与下方 JSON 预览同为接口返回的那一份。</span>
+    </div>
+
+    <h2 style="margin-top:18px;">章节明细</h2>
+    <table class="cues">
+      <thead>
+        <tr>
+          <th>章节</th>
+          <th>开始</th>
+          <th>结束</th>
+          <th>时长(ms)</th>
+          <th>与目标偏差(ms)</th>
+          <th>字幕输入顺序范围</th>
+          <th>条数</th>
+        </tr>
+      </thead>
+      <tbody id="chapterRows"></tbody>
+    </table>
+
+    <h2 style="margin-top:18px;">切分点明细</h2>
+    <table class="cues">
+      <thead>
+        <tr>
+          <th>切分点</th>
+          <th>停顿间隔(ms)</th>
+          <th>停顿缺口(ms)</th>
+          <th>惩罚（缺口²）</th>
+        </tr>
+      </thead>
+      <tbody id="splitRows"></tbody>
+    </table>
+
+    <h2 style="margin-top:18px;">JSON 预览</h2>
+    <pre class="preview" id="jsonPreview"></pre>
+  </div>
+</div>
+
+<script>
+(function () {
+  const srtEl = document.getElementById("srt");
+  const chapterCountEl = document.getElementById("chapterCount");
+  const preferredPauseEl = document.getElementById("preferredPause");
+  const errorBox = document.getElementById("errorBox");
+  const resultCard = document.getElementById("resultCard");
+  const okBox = document.getElementById("okBox");
+  const chapterRowsEl = document.getElementById("chapterRows");
+  const splitRowsEl = document.getElementById("splitRows");
+  const jsonPreviewEl = document.getElementById("jsonPreview");
+  const statusEl = document.getElementById("status");
+
+  function showError(message) {
+    errorBox.textContent = message;
+    errorBox.classList.remove("hidden");
+  }
+  function clearAlerts() {
+    errorBox.classList.add("hidden");
+    okBox.classList.add("hidden");
+    errorBox.textContent = "";
+    okBox.textContent = "";
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+
+  const EXAMPLE_SRT =
+    "1\n00:00:00,000 --> 00:00:04,000\n大家好，欢迎收看本期节目\n\n" +
+    "2\n00:00:04,300 --> 00:00:08,000\n今天我们要聊三个话题\n\n" +
+    "3\n00:00:08,300 --> 00:00:12,000\n首先是最近的科技新闻\n\n" +
+    "4\n00:00:14,000 --> 00:00:18,000\n接下来是体育板块\n\n" +
+    "5\n00:00:18,300 --> 00:00:22,000\n昨晚的比赛非常精彩\n\n" +
+    "6\n00:00:22,500 --> 00:00:26,000\n主队三比一获胜\n\n" +
+    "7\n00:00:30,000 --> 00:00:34,000\n最后是天气预报\n\n" +
+    "8\n00:00:34,300 --> 00:00:38,000\n明天多云转晴\n\n" +
+    "9\n00:00:38,500 --> 00:00:42,000\n感谢收看，下期再见\n";
+
+  document.getElementById("fillExample").addEventListener("click", () => {
+    srtEl.value = EXAMPLE_SRT;
+    chapterCountEl.value = 3;
+    preferredPauseEl.value = 1500;
+    clearAlerts();
+    resultCard.classList.add("hidden");
+  });
+
+  function render(data) {
+    chapterRowsEl.innerHTML = data.chapters.map(c =>
+      "<tr>" +
+      '<td class="num">' + c.order + "</td>" +
+      '<td class="tc">' + escapeHtml(c.start) + "</td>" +
+      '<td class="tc">' + escapeHtml(c.end) + "</td>" +
+      '<td class="rate">' + c.duration_ms + "</td>" +
+      '<td class="rate">' + (c.deviation_ms > 0 ? "+" : "") + c.deviation_ms + "</td>" +
+      "<td>第 " + c.cue_order_from + " – " + c.cue_order_to + " 条</td>" +
+      '<td class="rate">' + c.cue_count + "</td>" +
+      "</tr>"
+    ).join("");
+
+    splitRowsEl.innerHTML = data.splits.length ? data.splits.map(s =>
+      "<tr>" +
+      "<td>第 " + s.after_cue_order + " 条 → 第 " + s.before_cue_order + " 条之间</td>" +
+      '<td class="rate">' + s.gap_ms + "</td>" +
+      '<td class="rate">' + s.pause_shortfall_ms + "</td>" +
+      '<td class="rate">' + s.penalty + "</td>" +
+      "</tr>"
+    ).join("") : '<tr><td colspan="4" class="hint">仅一章，无切分点。</td></tr>';
+
+    okBox.textContent =
+      "共 " + data.cue_count + " 条字幕切成 " + data.chapter_count + " 章：" +
+      "整段总时长 " + data.total_duration_ms + " ms，目标每章 " +
+      data.target_duration_ms + " ms；总代价 " + data.total_cost +
+      "（时长偏差平方和 " + data.duration_cost + " + 停顿惩罚平方和 " +
+      data.pause_cost + "）。";
+    okBox.classList.remove("hidden");
+  }
+
+  document.getElementById("submit").addEventListener("click", async () => {
+    clearAlerts();
+    resultCard.classList.add("hidden");
+
+    const rawK = chapterCountEl.value.trim();
+    const rawP = preferredPauseEl.value.trim();
+    if (!/^\d+$/.test(rawK) || Number(rawK) < 1) {
+      showError("章节数 K 必须是正整数，例如 3。");
+      return;
+    }
+    if (!/^\d+$/.test(rawP)) {
+      showError("优选停顿毫秒数 P 必须是非负整数，例如 0、1500。");
+      return;
+    }
+
+    statusEl.textContent = "规划中…";
+    try {
+      const resp = await fetch("/api/chapters", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          srt: srtEl.value,
+          chapter_count: Number(rawK),
+          preferred_pause_ms: Number(rawP)
+        })
+      });
+      const rawText = await resp.text();
+      let data;
+      try { data = JSON.parse(rawText); }
+      catch (_e) { data = null; }
+      if (!resp.ok) {
+        showError((data && data.detail && data.detail.message) ||
+          ("请求失败（HTTP " + resp.status + "）"));
+        statusEl.textContent = "";
+        return;
+      }
+
+      // 页面 JSON 预览与下载共用接口返回的同一份 JSON 原文
+      window.__chaptersJson = rawText;
+      jsonPreviewEl.textContent = rawText;
+      render(data);
+      resultCard.classList.remove("hidden");
+      statusEl.textContent = "";
+    } catch (err) {
+      showError("请求出错：" + err);
+      statusEl.textContent = "";
+    }
+  });
+
+  document.getElementById("download").addEventListener("click", () => {
+    const content = window.__chaptersJson || "";
+    const blob = new Blob([content], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "chapters.json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+})();
+</script>
+</body>
+</html>

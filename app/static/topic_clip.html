@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>字幕主题短片段检索</title>
+<style>
+  :root {
+    --bg: #f4f6fa;
+    --card: #ffffff;
+    --border: #d9dee8;
+    --text: #1f2733;
+    --muted: #6b7686;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --danger: #dc2626;
+    --danger-bg: #fef2f2;
+    --warn-bg: #fffbeb;
+    --warn-border: #f59e0b;
+    --ok-bg: #f0fdf4;
+    --ok-border: #16a34a;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .nav { margin: 0 0 16px; font-size: 14px; }
+  .nav a { color: var(--primary); text-decoration: none; margin-right: 16px; }
+  .nav a:hover { text-decoration: underline; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  .hint { color: var(--muted); font-weight: 400; font-size: 13px; }
+  textarea {
+    width: 100%;
+    min-height: 220px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: 13px/1.6 var(--mono);
+    resize: vertical;
+  }
+  textarea:focus, input:focus { outline: 2px solid rgba(37, 99, 235, .35); border-color: var(--primary); }
+  table.kw { width: 100%; border-collapse: separate; border-spacing: 0 8px; }
+  table.kw th {
+    text-align: left;
+    font-size: 13px;
+    color: var(--muted);
+    font-weight: 600;
+    padding: 0 8px 0 0;
+  }
+  table.kw td { padding: 0; vertical-align: middle; }
+  table.kw td.word { padding-right: 8px; }
+  table.kw td.count { width: 200px; padding-right: 8px; }
+  table.kw td.del { width: 56px; text-align: right; }
+  input[type="text"], input[type="number"] {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font: 14px var(--mono);
+  }
+  button {
+    border: 1px solid var(--border);
+    background: #fff;
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:hover { background: #f1f4f9; }
+  button.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+    font-weight: 600;
+    padding: 10px 22px;
+  }
+  button.primary:hover { background: var(--primary-hover); }
+  button.danger-link { border-color: transparent; color: var(--danger); padding: 4px 8px; }
+  button.danger-link:hover { background: var(--danger-bg); }
+  .toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+  .alert {
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    white-space: pre-wrap;
+  }
+  .alert.error { background: var(--danger-bg); border: 1px solid var(--danger); color: var(--danger); }
+  .alert.warn { background: var(--warn-bg); border: 1px solid var(--warn-border); color: #92400e; }
+  .alert.ok { background: var(--ok-bg); border: 1px solid var(--ok-border); color: #166534; }
+  .hidden { display: none; }
+  table.cues { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+  table.cues th, table.cues td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+  table.cues th { background: #f8fafc; }
+  table.cues td.num { width: 48px; color: var(--muted); text-align: right; }
+  table.cues td.tc { font-family: var(--mono); white-space: nowrap; }
+  table.cues td.rate { font-family: var(--mono); text-align: right; white-space: nowrap; }
+  .tags { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tag {
+    display: inline-block;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    color: #1d4ed8;
+    border-radius: 999px;
+    padding: 0 8px;
+    font-size: 12px;
+    font-family: var(--mono);
+  }
+  .tag.empty { background: #f8fafc; border-color: var(--border); color: var(--muted); }
+  mark { background: #fef08a; color: inherit; padding: 0 1px; border-radius: 2px; }
+  .preview {
+    width: 100%;
+    max-height: 320px;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: 12px/1.6 var(--mono);
+    background: #fafbfc;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="nav">
+    <a href="/">字幕时间漂移校正</a>
+    <a href="/placement">字幕位置规划</a>
+    <a href="/reading-load">阅读负荷热区</a>
+    <a href="/terms">字幕专名统一</a>
+    <a href="/wrap">字幕智能断行</a>
+    <a href="/chapters">字幕章节规划</a>
+    <a href="/bilingual-align">双语字幕配对</a>
+    <a href="/selection">重叠字幕择优保留</a>
+    <a href="/cut-rejoin">删段后字幕接轴</a>
+  </p>
+  <h1>字幕主题短片段检索</h1>
+  <p class="sub">粘贴 SRT，填写 1～8 组关键词与该词需要出现的字幕条数（正整数）。关键词按 Unicode
+    casefold 折叠比较（不区分大小写等），同一条字幕内每个词至多计一次。系统沿输入顺序寻找覆盖各词
+    所需条数的<b>最短连续字幕窗口</b>：片段起点取窗口首条开始、终点取窗口内最晚结束；全局按时长最短、
+    起点最早、窗口起始序号最早选解。整体不足时返回无解与逐词缺少条数。字幕开始时间必须非递减。</p>
+
+  <div class="card">
+    <label for="srt">原始 SRT 字幕</label>
+    <textarea id="srt" placeholder="1&#10;00:00:00,000 --> 00:00:04,000&#10;第一段内容&#10;&#10;2&#10;00:00:04,500 --> 00:00:08,000&#10;继续第一段"></textarea>
+  </div>
+
+  <div class="card">
+    <h2>关键词组
+      <span class="hint">1～8 组，按输入顺序回显；折叠后重复或空词会被拒绝（422）</span>
+    </h2>
+    <table class="kw">
+      <thead>
+        <tr>
+          <th style="width:50%">关键词</th>
+          <th style="width:200px">所需出现字幕条数（正整数）</th>
+          <th style="width:56px"></th>
+        </tr>
+      </thead>
+      <tbody id="keywordRows"></tbody>
+    </table>
+    <div class="toolbar">
+      <button type="button" id="addKeyword">+ 添加关键词组</button>
+      <button type="button" id="fillExample">填入示例</button>
+    </div>
+  </div>
+
+  <div id="errorBox" class="alert error hidden"></div>
+
+  <div class="toolbar" style="margin-bottom: 20px;">
+    <button type="button" class="primary" id="submit">检索片段</button>
+    <span class="hint" id="status"></span>
+  </div>
+
+  <div id="resultCard" class="card hidden">
+    <h2>检索结果</h2>
+    <div id="okBox" class="alert ok hidden"></div>
+    <div id="warnBox" class="alert warn hidden"></div>
+    <div class="toolbar" style="margin-top:0;">
+      <button type="button" class="primary" id="download">下载结果 JSON</button>
+      <span class="hint">下载内容与下方 JSON 预览同为接口返回的那一份。</span>
+    </div>
+
+    <h2 style="margin-top:18px;">逐词命中情况</h2>
+    <table class="cues">
+      <thead>
+        <tr>
+          <th>关键词</th>
+          <th>所需条数</th>
+          <th id="hitColTitle">窗口内命中条数</th>
+          <th id="missingColTitle">仍缺条数</th>
+        </tr>
+      </thead>
+      <tbody id="wordRows"></tbody>
+    </table>
+
+    <div id="clipBlock" class="hidden">
+      <h2 style="margin-top:18px;">片段字幕（连续窗口）</h2>
+      <table class="cues">
+        <thead>
+          <tr>
+            <th>输入序号</th>
+            <th>SRT 序号</th>
+            <th>开始</th>
+            <th>结束</th>
+            <th>命中词</th>
+            <th>文本</th>
+          </tr>
+        </thead>
+        <tbody id="clipRows"></tbody>
+      </table>
+    </div>
+
+    <h2 style="margin-top:18px;">JSON 预览</h2>
+    <pre class="preview" id="jsonPreview"></pre>
+  </div>
+</div>
+
+<script>
+(function () {
+  const MAX_GROUPS = 8;
+  const srtEl = document.getElementById("srt");
+  const rowsEl = document.getElementById("keywordRows");
+  const errorBox = document.getElementById("errorBox");
+  const resultCard = document.getElementById("resultCard");
+  const okBox = document.getElementById("okBox");
+  const warnBox = document.getElementById("warnBox");
+  const wordRowsEl = document.getElementById("wordRows");
+  const clipBlock = document.getElementById("clipBlock");
+  const clipRowsEl = document.getElementById("clipRows");
+  const hitColTitle = document.getElementById("hitColTitle");
+  const jsonPreviewEl = document.getElementById("jsonPreview");
+  const statusEl = document.getElementById("status");
+
+  function addRow(word, count) {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      '<td class="word"><input type="text" class="kw-word" placeholder="例如：北大 / iPhone" spellcheck="false"></td>' +
+      '<td class="count"><input type="number" class="kw-count" min="1" step="1" value="1"></td>' +
+      '<td class="del"><button type="button" class="danger-link" title="删除该词组">删除</button></td>';
+    tr.querySelector(".kw-word").value = word || "";
+    if (count !== undefined && count !== null) tr.querySelector(".kw-count").value = count;
+    tr.querySelector(".danger-link").addEventListener("click", () => {
+      if (rowsEl.children.length > 1) tr.remove();
+      else alert("至少需要保留 1 组关键词。");
+    });
+    rowsEl.appendChild(tr);
+  }
+
+  function collectKeywords() {
+    const groups = [];
+    for (const tr of rowsEl.querySelectorAll("tr")) {
+      groups.push({
+        word: tr.querySelector(".kw-word").value,
+        required_count: tr.querySelector(".kw-count").value.trim()
+      });
+    }
+    return groups;
+  }
+
+  function showError(message) {
+    errorBox.textContent = message;
+    errorBox.classList.remove("hidden");
+  }
+  function clearAlerts() {
+    errorBox.classList.add("hidden");
+    okBox.classList.add("hidden");
+    warnBox.classList.add("hidden");
+    errorBox.textContent = "";
+    okBox.textContent = "";
+    warnBox.textContent = "";
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+  function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  // 初始两组关键词
+  addRow();
+  addRow();
+
+  document.getElementById("addKeyword").addEventListener("click", () => {
+    if (rowsEl.children.length >= MAX_GROUPS) {
+      alert("最多只能填写 " + MAX_GROUPS + " 组关键词。");
+      return;
+    }
+    addRow();
+  });
+
+  const EXAMPLE_SRT =
+    "1\n00:00:00,000 --> 00:00:03,000\n片头音乐渐入\n\n" +
+    "2\n00:00:03,200 --> 00:00:07,000\n今天我们聊聊人工智能的新进展\n\n" +
+    "3\n00:00:07,200 --> 00:00:11,000\n大模型在翻译任务上表现突出\n\n" +
+    "4\n00:00:11,200 --> 00:00:15,000\n接下来进入体育新闻\n\n" +
+    "5\n00:00:15,200 --> 00:00:19,000\n昨晚足球比赛十分精彩\n\n" +
+    "6\n00:00:19,200 --> 00:00:23,000\n主队三比一获胜，人工智能裁判抢镜\n\n" +
+    "7\n00:00:23,200 --> 00:00:27,000\n最后是天气预报\n\n" +
+    "8\n00:00:27,200 --> 00:00:31,000\n明天多云，人工智能助手提醒带伞\n";
+
+  document.getElementById("fillExample").addEventListener("click", () => {
+    srtEl.value = EXAMPLE_SRT;
+    rowsEl.innerHTML = "";
+    addRow("人工智能", 2);
+    addRow("模型", 1);
+    clearAlerts();
+    resultCard.classList.add("hidden");
+  });
+
+  function highlightText(text, keywordViews) {
+    const patterns = keywordViews
+      .map(k => k.word)
+      .filter(w => w && w.trim())
+      .map(escapeRegExp);
+    if (!patterns.length) return escapeHtml(text).replace(/\n/g, "<br>");
+    // 在原文上分段转义，保证含 &<> 等字符的关键词也能正确高亮
+    const re = new RegExp("(" + patterns.join("|") + ")", "giu");
+    let html = "";
+    let last = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      html += escapeHtml(text.slice(last, m.index)) + "<mark>" + escapeHtml(m[0]) + "</mark>";
+      last = m.index + m[0].length;
+      if (m[0].length === 0) re.lastIndex += 1;
+    }
+    html += escapeHtml(text.slice(last));
+    return html.replace(/\n/g, "<br>");
+  }
+
+  function render(data) {
+    hitColTitle.textContent = data.found ? "窗口内命中条数" : "全片命中条数";
+    document.getElementById("missingColTitle").textContent =
+      data.found ? "仍缺条数（窗口内）" : "缺少条数（全片）";
+
+    wordRowsEl.innerHTML = data.keywords.map(k =>
+      "<tr>" +
+      "<td>" + escapeHtml(k.word) + "</td>" +
+      '<td class="rate">' + k.required_count + "</td>" +
+      '<td class="rate">' + k.hit_count + "</td>" +
+      '<td class="rate">' + k.missing_count + "</td>" +
+      "</tr>"
+    ).join("");
+
+    if (data.found) {
+      const c = data.clip;
+      okBox.textContent =
+        "最短片段：" + c.start + " → " + c.end + "（时长 " + c.duration_ms +
+        " ms），覆盖第 " + c.cue_order_from + " – " + c.cue_order_to +
+        " 条字幕（共 " + c.cue_count + " 条）。";
+      okBox.classList.remove("hidden");
+
+      clipBlock.classList.remove("hidden");
+      clipRowsEl.innerHTML = c.cues.map(q =>
+        "<tr>" +
+        '<td class="num">' + q.cue_order + "</td>" +
+        '<td class="num">' + escapeHtml(q.index) + "</td>" +
+        '<td class="tc">' + escapeHtml(q.start) + "</td>" +
+        '<td class="tc">' + escapeHtml(q.end) + "</td>" +
+        '<td><div class="tags">' +
+          (q.hit_words.length
+            ? q.hit_words.map(w => '<span class="tag">' + escapeHtml(w) + "</span>").join("")
+            : '<span class="tag empty">—</span>') +
+        "</div></td>" +
+        "<td>" + highlightText(q.text, data.keywords) + "</td>" +
+        "</tr>"
+      ).join("");
+    } else {
+      const totalNeed = data.keywords.reduce((s, k) => s + k.missing_count, 0);
+      warnBox.textContent =
+        "未找到覆盖全部关键词所需条数的连续字幕片段：共 " + data.cue_count +
+        " 条字幕，逐词缺少条数合计 " + totalNeed + "（详见下表）。";
+      warnBox.classList.remove("hidden");
+      clipBlock.classList.add("hidden");
+      clipRowsEl.innerHTML = "";
+    }
+  }
+
+  document.getElementById("submit").addEventListener("click", async () => {
+    clearAlerts();
+    resultCard.classList.add("hidden");
+
+    const rawGroups = collectKeywords();
+    if (!rawGroups.length) {
+      showError("至少需要填写 1 组关键词。");
+      return;
+    }
+    const groups = [];
+    for (let i = 0; i < rawGroups.length; i++) {
+      if (!rawGroups[i].word.trim()) {
+        showError("第 " + (i + 1) + " 组关键词为空，请填写实际要检索的词。");
+        return;
+      }
+      const cnt = rawGroups[i].required_count;
+      if (!/^\d+$/.test(cnt) || Number(cnt) < 1) {
+        showError("第 " + (i + 1) + " 组关键词所需字幕条数必须是正整数，例如 1、2。");
+        return;
+      }
+      groups.push({ word: rawGroups[i].word, required_count: Number(cnt) });
+    }
+    // 客户端预校验：折叠近似用 toLocaleLowerCase（Unicode casefold 的常见子集，
+    // 如 Straße 等折叠差异以服务端 Python casefold 为准）
+    const foldedSeen = new Set();
+    for (let i = 0; i < groups.length; i++) {
+      const folded = groups[i].word.trim().toLocaleLowerCase();
+      if (foldedSeen.has(folded)) {
+        showError("第 " + (i + 1) + " 组关键词与更早的词组重复（折叠比较不区分大小写）。");
+        return;
+      }
+      foldedSeen.add(folded);
+    }
+
+    statusEl.textContent = "检索中…";
+    try {
+      const resp = await fetch("/api/topic-clip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ srt: srtEl.value, keywords: groups })
+      });
+      const rawText = await resp.text();
+      let data;
+      try { data = JSON.parse(rawText); }
+      catch (_e) { data = null; }
+      if (!resp.ok) {
+        showError((data && data.detail && data.detail.message) ||
+          ("请求失败（HTTP " + resp.status + "）"));
+        statusEl.textContent = "";
+        return;
+      }
+
+      // 页面 JSON 预览与下载共用接口返回的同一份 JSON 原文
+      window.__topicClipJson = rawText;
+      jsonPreviewEl.textContent = rawText;
+      render(data);
+      resultCard.classList.remove("hidden");
+      statusEl.textContent = "";
+    } catch (err) {
+      showError("请求出错：" + err);
+      statusEl.textContent = "";
+    }
+  });
+
+  document.getElementById("download").addEventListener("click", () => {
+    const content = window.__topicClipJson || "";
+    const blob = new Blob([content], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "topic-clip.json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+})();
+</script>
+</body>
+</html>

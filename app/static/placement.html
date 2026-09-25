@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>字幕位置规划</title>
+<style>
+  :root {
+    --bg: #f4f6fa;
+    --card: #ffffff;
+    --border: #d9dee8;
+    --text: #1f2733;
+    --muted: #6b7686;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --danger: #dc2626;
+    --danger-bg: #fef2f2;
+    --warn-bg: #fffbeb;
+    --warn-border: #f59e0b;
+    --ok-bg: #f0fdf4;
+    --ok-border: #16a34a;
+    --top-bg: #eff6ff;
+    --bottom-bg: #f0fdf4;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .nav { margin: 0 0 16px; font-size: 14px; }
+  .nav a { color: var(--primary); text-decoration: none; }
+  .nav a:hover { text-decoration: underline; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  .hint { color: var(--muted); font-weight: 400; font-size: 13px; }
+  textarea {
+    width: 100%;
+    min-height: 220px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: 13px/1.6 var(--mono);
+    resize: vertical;
+  }
+  textarea:focus, input:focus { outline: 2px solid rgba(37, 99, 235, .35); border-color: var(--primary); }
+  table.blocks { width: 100%; border-collapse: separate; border-spacing: 0 8px; }
+  table.blocks th {
+    text-align: left;
+    font-size: 13px;
+    color: var(--muted);
+    font-weight: 600;
+    padding: 0 8px 0 0;
+  }
+  table.blocks td { padding: 0; vertical-align: middle; }
+  table.blocks td.time { width: 44%; padding-right: 8px; }
+  table.blocks td.op { width: 40px; text-align: center; color: var(--muted); }
+  table.blocks td.del { width: 44px; text-align: right; }
+  input[type="text"], input[type="number"] {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font: 14px var(--mono);
+  }
+  button {
+    border: 1px solid var(--border);
+    background: #fff;
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:hover { background: #f1f4f9; }
+  button.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+    font-weight: 600;
+    padding: 10px 22px;
+  }
+  button.primary:hover { background: var(--primary-hover); }
+  button.danger-link { border-color: transparent; color: var(--danger); padding: 4px 8px; }
+  button.danger-link:hover { background: var(--danger-bg); }
+  .toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+  .alert {
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    white-space: pre-wrap;
+  }
+  .alert.error { background: var(--danger-bg); border: 1px solid var(--danger); color: var(--danger); }
+  .alert.warn { background: var(--warn-bg); border: 1px solid var(--warn-border); color: #92400e; }
+  .alert.ok { background: var(--ok-bg); border: 1px solid var(--ok-border); color: #166534; }
+  .hidden { display: none; }
+  .preview {
+    width: 100%;
+    min-height: 220px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: 13px/1.6 var(--mono);
+    background: #fafbfc;
+    white-space: pre-wrap;
+    overflow-x: auto;
+  }
+  .cues { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+  .cues th, .cues td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+  .cues th { background: #f8fafc; }
+  .cues td.num { width: 44px; color: var(--muted); text-align: right; }
+  .cues td.tc { font-family: var(--mono); white-space: nowrap; }
+  .badge { display: inline-block; border-radius: 999px; padding: 1px 10px; font-size: 12px; font-weight: 600; }
+  .badge.top { background: var(--top-bg); color: #1d4ed8; border: 1px solid #bfdbfe; }
+  .badge.bottom { background: var(--bottom-bg); color: #166534; border: 1px solid #bbf7d0; }
+  tr.row-top td.pos { background: var(--top-bg); }
+  tr.row-bottom td.pos { background: var(--bottom-bg); }
+  tr.still { outline: 2px solid var(--warn-border); outline-offset: -2px; }
+  .costline { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+  .costline input { width: 140px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="nav"><a href="/">← 时间漂移校正</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="/reading-load">阅读负荷热区</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="/terms">字幕专名统一</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="/wrap">字幕智能断行</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="/chapters">字幕章节规划</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="/topic-clip">主题短片段检索</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="/bilingual-align">双语字幕配对</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="/selection">重叠字幕择优保留（按优先级与间隔取舍）→</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="/cut-rejoin">删段后字幕接轴（按删除区间裁切前移）→</a></p>
+  <h1>字幕位置规划</h1>
+  <p class="sub">粘贴 SRT，填写画面上方 / 下方被遮挡（如台标、弹幕条、滚动新闻）的时间段与相邻字幕上下换位代价，系统为每条字幕选择总遮挡时长与换位代价最小的位置（同分优先下方），并导出带 line 位置的 WebVTT。</p>
+
+  <div class="card">
+    <label for="srt">原始 SRT 字幕</label>
+    <textarea id="srt" placeholder="1&#10;00:00:05,000 --> 00:00:08,000&#10;第一句字幕&#10;&#10;2&#10;00:00:12,000 --> 00:00:15,500&#10;第二句字幕"></textarea>
+  </div>
+
+  <div class="card">
+    <h2>画面上方遮挡时段
+      <span class="hint">开始 → 结束，同侧重叠时段自动合并；时间格式 HH:MM:SS,mmm</span>
+    </h2>
+    <table class="blocks">
+      <thead>
+        <tr>
+          <th style="width:44%">开始时间</th>
+          <th style="width:44%">结束时间</th>
+          <th style="width:40px"></th>
+          <th style="width:44px"></th>
+        </tr>
+      </thead>
+      <tbody id="topRows"></tbody>
+    </table>
+    <div class="toolbar">
+      <button type="button" id="addTop">+ 添加上方遮挡</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>画面下方遮挡时段
+      <span class="hint">开始 → 结束，同侧重叠时段自动合并；时间格式 HH:MM:SS,mmm</span>
+    </h2>
+    <table class="blocks">
+      <thead>
+        <tr>
+          <th style="width:44%">开始时间</th>
+          <th style="width:44%">结束时间</th>
+          <th style="width:40px"></th>
+          <th style="width:44px"></th>
+        </tr>
+      </thead>
+      <tbody id="bottomRows"></tbody>
+    </table>
+    <div class="toolbar">
+      <button type="button" id="addBottom">+ 添加下方遮挡</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <label for="switchCost">相邻字幕上下换位代价（毫秒，非负整数）</label>
+    <div class="costline">
+      <input type="number" id="switchCost" min="0" step="1" value="2000">
+      <span class="hint">相邻两条字幕一上一下时计入该代价；越大越倾向整段保持同侧，减少跳动。</span>
+    </div>
+  </div>
+
+  <div id="errorBox" class="alert error hidden"></div>
+  <div id="warnBox" class="alert warn hidden"></div>
+
+  <div class="toolbar" style="margin-bottom: 20px;">
+    <button type="button" class="primary" id="submit">规划位置</button>
+    <button type="button" id="fillExample">填入示例</button>
+    <span class="hint" id="status"></span>
+  </div>
+
+  <div id="resultCard" class="card hidden">
+    <h2>规划结果</h2>
+    <div id="okBox" class="alert ok hidden"></div>
+    <div class="toolbar" style="margin-top:0;">
+      <button type="button" class="primary" id="download">下载 placement.vtt</button>
+    </div>
+    <table class="cues">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>时间轴</th>
+          <th>所选位置</th>
+          <th>上方遮挡(ms)</th>
+          <th>下方遮挡(ms)</th>
+          <th>所选位置遮挡(ms)</th>
+          <th>文本</th>
+        </tr>
+      </thead>
+      <tbody id="cueTable"></tbody>
+    </table>
+    <h2 style="margin-top:18px;">WebVTT 预览</h2>
+    <pre class="preview" id="preview"></pre>
+  </div>
+</div>
+
+<script>
+(function () {
+  const srtEl = document.getElementById("srt");
+  const costEl = document.getElementById("switchCost");
+  const topRowsEl = document.getElementById("topRows");
+  const bottomRowsEl = document.getElementById("bottomRows");
+  const errorBox = document.getElementById("errorBox");
+  const warnBox = document.getElementById("warnBox");
+  const resultCard = document.getElementById("resultCard");
+  const previewEl = document.getElementById("preview");
+  const cueTableEl = document.getElementById("cueTable");
+  const okBox = document.getElementById("okBox");
+  const statusEl = document.getElementById("status");
+
+  function addRow(tbody, start, end) {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      '<td class="time"><input type="text" class="start" placeholder="00:00:10,000" spellcheck="false"></td>' +
+      '<td class="time"><input type="text" class="end" placeholder="00:00:30,000" spellcheck="false"></td>' +
+      '<td class="op">→</td>' +
+      '<td class="del"><button type="button" class="danger-link" title="删除该时段">删除</button></td>';
+    tr.querySelector(".start").value = start || "";
+    tr.querySelector(".end").value = end || "";
+    tr.querySelector(".danger-link").addEventListener("click", () => tr.remove());
+    tbody.appendChild(tr);
+  }
+
+  function collectBlocks(tbody) {
+    const blocks = [];
+    for (const tr of tbody.querySelectorAll("tr")) {
+      const start = tr.querySelector(".start").value.trim();
+      const end = tr.querySelector(".end").value.trim();
+      // 整行留空视为不添加；只填一侧交给服务端校验并返回 422
+      if (!start && !end) continue;
+      blocks.push({ start, end });
+    }
+    return blocks;
+  }
+
+  function showError(message) {
+    errorBox.textContent = message;
+    errorBox.classList.remove("hidden");
+  }
+  function clearAlerts() {
+    errorBox.classList.add("hidden");
+    warnBox.classList.add("hidden");
+    okBox.classList.add("hidden");
+    errorBox.textContent = "";
+    warnBox.textContent = "";
+    okBox.textContent = "";
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+
+  document.getElementById("addTop").addEventListener("click", () => addRow(topRowsEl));
+  document.getElementById("addBottom").addEventListener("click", () => addRow(bottomRowsEl));
+
+  const EXAMPLE_SRT =
+    "1\n00:00:05,000 --> 00:00:09,000\n大家好，欢迎收看本期节目\n\n" +
+    "2\n00:00:14,000 --> 00:00:18,000\n上方台标时段，字幕会自动放到下方\n\n" +
+    "3\n00:00:26,000 --> 00:00:30,000\n下方滚动新闻时段，字幕翻回上方\n\n" +
+    "4\n00:00:40,000 --> 00:00:44,000\n无遮挡但换位有代价，继续留在同侧上方\n";
+
+  document.getElementById("fillExample").addEventListener("click", () => {
+    srtEl.value = EXAMPLE_SRT;
+    topRowsEl.innerHTML = "";
+    bottomRowsEl.innerHTML = "";
+    addRow(topRowsEl, "00:00:12,000", "00:00:20,000");
+    addRow(bottomRowsEl, "00:00:24,000", "00:00:32,000");
+    costEl.value = "2000";
+    clearAlerts();
+    resultCard.classList.add("hidden");
+  });
+
+  document.getElementById("submit").addEventListener("click", async () => {
+    clearAlerts();
+    resultCard.classList.add("hidden");
+    statusEl.textContent = "规划中…";
+
+    const rawCost = costEl.value.trim();
+    if (!/^\d+$/.test(rawCost)) {
+      showError("换位代价必须是非负整数（毫秒），例如 0、2000。");
+      statusEl.textContent = "";
+      return;
+    }
+
+    const body = {
+      srt: srtEl.value,
+      top_blocks: collectBlocks(topRowsEl),
+      bottom_blocks: collectBlocks(bottomRowsEl),
+      switch_cost_ms: parseInt(rawCost, 10)
+    };
+
+    try {
+      const resp = await fetch("/api/placement", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        showError((data.detail && data.detail.message) ||
+          ("请求失败（HTTP " + resp.status + "）"));
+        statusEl.textContent = "";
+        return;
+      }
+
+      window.__vtt = data.vtt;
+      previewEl.textContent = data.vtt;
+      cueTableEl.innerHTML = data.cues.map(c => {
+        const label = c.position === "top" ? "上方" : "下方";
+        return '<tr class="row-' + c.position + (c.still_occluded ? " still" : "") + '">' +
+          '<td class="num">' + escapeHtml(c.index) + "</td>" +
+          '<td class="tc">' + escapeHtml(c.start) + "<br>" + escapeHtml(c.end) + "</td>" +
+          '<td class="pos"><span class="badge ' + c.position + '">' + label + "</span></td>" +
+          '<td class="tc">' + c.top_occluded_ms + "</td>" +
+          '<td class="tc">' + c.bottom_occluded_ms + "</td>" +
+          '<td class="tc">' + (c.still_occluded
+            ? '<strong style="color:#b45309">' + c.occluded_ms + "</strong>"
+            : c.occluded_ms) + "</td>" +
+          "<td>" + escapeHtml(c.text).replace(/\n/g, "<br>") + "</td>" +
+          "</tr>";
+      }).join("");
+
+      if (data.still_occluded_cues.length) {
+        const list = data.still_occluded_cues
+          .map(c => "序号 " + c.index + "（" + (c.position === "top" ? "上方" : "下方")
+            + "仍被遮挡 " + c.occluded_ms + " ms）")
+          .join("；");
+        warnBox.textContent =
+          "以下 " + data.still_occluded_cues.length + " 条字幕所选位置仍有遮挡，"
+          + "请考虑调整遮挡标注或换位代价：" + list + "。";
+        warnBox.classList.remove("hidden");
+      }
+      okBox.textContent =
+        "共规划 " + data.cues.length + " 条字幕，换位 " + data.switch_count
+        + " 次，所选位置总遮挡 " + data.total_occluded_ms + " ms；"
+        + "上方遮挡合并为 " + data.merged_top_blocks.length + " 段，下方合并为 "
+        + data.merged_bottom_blocks.length + " 段。";
+      if (!data.still_occluded_cues.length) okBox.classList.remove("hidden");
+      resultCard.classList.remove("hidden");
+      statusEl.textContent = "";
+    } catch (err) {
+      showError("请求出错：" + err);
+      statusEl.textContent = "";
+    }
+  });
+
+  document.getElementById("download").addEventListener("click", () => {
+    const content = window.__vtt || "";
+    const blob = new Blob([content], { type: "text/vtt;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "placement.vtt";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+})();
+</script>
+</body>
+</html>

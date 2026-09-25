@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>双语字幕配对</title>
+<style>
+  :root {
+    --bg: #f4f6fa;
+    --card: #ffffff;
+    --border: #d9dee8;
+    --text: #1f2733;
+    --muted: #6b7686;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --danger: #dc2626;
+    --danger-bg: #fef2f2;
+    --warn-bg: #fffbeb;
+    --warn-border: #f59e0b;
+    --ok-bg: #f0fdf4;
+    --ok-border: #16a34a;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .nav { margin: 0 0 16px; font-size: 14px; }
+  .nav a { color: var(--primary); text-decoration: none; margin-right: 16px; }
+  .nav a:hover { text-decoration: underline; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  .hint { color: var(--muted); font-weight: 400; font-size: 13px; }
+  .srt-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 800px) { .srt-grid { grid-template-columns: 1fr; } }
+  textarea {
+    width: 100%;
+    min-height: 240px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: 13px/1.6 var(--mono);
+    resize: vertical;
+  }
+  textarea:focus, input:focus { outline: 2px solid rgba(37, 99, 235, .35); border-color: var(--primary); }
+  button {
+    border: 1px solid var(--border);
+    background: #fff;
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:hover { background: #f1f4f9; }
+  button.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+    font-weight: 600;
+    padding: 10px 22px;
+  }
+  button.primary:hover { background: var(--primary-hover); }
+  .toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+  .alert {
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    white-space: pre-wrap;
+  }
+  .alert.error { background: var(--danger-bg); border: 1px solid var(--danger); color: var(--danger); }
+  .alert.ok { background: var(--ok-bg); border: 1px solid var(--ok-border); color: #166534; }
+  .hidden { display: none; }
+  table.cues { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+  table.cues th, table.cues td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+  table.cues th { background: #f8fafc; }
+  table.cues td.num { color: var(--muted); text-align: right; white-space: nowrap; }
+  table.cues td.tc { font-family: var(--mono); white-space: nowrap; }
+  table.cues td.cost { font-family: var(--mono); text-align: right; white-space: nowrap; }
+  .kind {
+    display: inline-block;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    color: #1d4ed8;
+    border-radius: 999px;
+    padding: 0 8px;
+    font-size: 12px;
+    font-family: var(--mono);
+    white-space: nowrap;
+  }
+  .kind.skip { background: var(--warn-bg); border-color: var(--warn-border); color: #92400e; }
+  .side-label { font-weight: 600; margin: 18px 0 0; }
+  .preview {
+    width: 100%;
+    max-height: 320px;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: 12px/1.6 var(--mono);
+    background: #fafbfc;
+    white-space: pre;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="nav">
+    <a href="/">字幕时间漂移校正</a>
+    <a href="/placement">字幕位置规划</a>
+    <a href="/reading-load">阅读负荷热区</a>
+    <a href="/terms">字幕专名统一</a>
+    <a href="/wrap">字幕智能断行</a>
+    <a href="/chapters">字幕章节规划</a>
+    <a href="/topic-clip">主题短片段检索</a>
+    <a href="/selection">重叠字幕择优保留</a>
+    <a href="/cut-rejoin">删段后字幕接轴</a>
+  </p>
+  <h1>双语字幕配对</h1>
+  <p class="sub">分别粘贴左右两份 SRT（如中文 / 英文），系统按输入顺序做<b>单调动态规划</b>配对：
+    允许 1:1、1:2、2:1 配对与单侧跳过；配对代价为两组时间跨度（组内首条开始 → 末条结束）的
+    起止差绝对值之和，合并每多一条加 500 毫秒，跳过每条加 3000 毫秒；总代价相同时按操作序列
+    依次优先 1:1、1:2、2:1、跳过左、跳过右。结果可预览并下载 UTF-8 CSV。</p>
+
+  <div class="card">
+    <div class="srt-grid">
+      <div>
+        <label for="leftSrt">左侧 SRT 字幕（如中文）</label>
+        <textarea id="leftSrt" placeholder="1&#10;00:00:01,000 --> 00:00:04,000&#10;第一句字幕&#10;&#10;2&#10;00:00:05,000 --> 00:00:06,500&#10;第二句字幕"></textarea>
+      </div>
+      <div>
+        <label for="rightSrt">右侧 SRT 字幕（如英文）</label>
+        <textarea id="rightSrt" placeholder="1&#10;00:00:01,000 --> 00:00:02,000&#10;First sentence&#10;&#10;2&#10;00:00:02,000 --> 00:00:04,000&#10;continued"></textarea>
+      </div>
+    </div>
+    <div class="toolbar">
+      <button type="button" id="fillExample">填入示例</button>
+      <span class="hint">两侧各自复用同一套 SRT 解析器；任一侧解析失败返回 422 并指明侧别。</span>
+    </div>
+  </div>
+
+  <div id="errorBox" class="alert error hidden"></div>
+
+  <div class="toolbar" style="margin-bottom: 20px;">
+    <button type="button" class="primary" id="submit">开始配对</button>
+    <span class="hint" id="status"></span>
+  </div>
+
+  <div id="resultCard" class="card hidden">
+    <h2>配对结果</h2>
+    <div id="okBox" class="alert ok hidden"></div>
+    <div class="toolbar" style="margin-top:0;">
+      <button type="button" class="primary" id="download">下载 CSV</button>
+      <span class="hint">UTF-8（含 BOM，Excel 可直接打开）；含换行 / 逗号 / 引号的正文按 CSV 规则加引号转义。</span>
+    </div>
+
+    <h2 style="margin-top:18px;">配对分组（按操作顺序）</h2>
+    <table class="cues">
+      <thead>
+        <tr>
+          <th>步骤</th>
+          <th>类型</th>
+          <th>左序号</th>
+          <th>左跨度</th>
+          <th>左原文</th>
+          <th>右序号</th>
+          <th>右跨度</th>
+          <th>右原文</th>
+          <th>起始差</th>
+          <th>结束差</th>
+          <th>合并代价</th>
+          <th>组代价</th>
+        </tr>
+      </thead>
+      <tbody id="pairRows"></tbody>
+    </table>
+
+    <p class="side-label">左侧未匹配（跳过，每条 +3000 ms）</p>
+    <table class="cues" id="unmatchedLeftTable">
+      <thead>
+        <tr>
+          <th>步骤</th>
+          <th>输入序号</th>
+          <th>SRT 序号</th>
+          <th>开始</th>
+          <th>结束</th>
+          <th>文本</th>
+        </tr>
+      </thead>
+      <tbody id="unmatchedLeftRows"></tbody>
+    </table>
+
+    <p class="side-label">右侧未匹配（跳过，每条 +3000 ms）</p>
+    <table class="cues" id="unmatchedRightTable">
+      <thead>
+        <tr>
+          <th>步骤</th>
+          <th>输入序号</th>
+          <th>SRT 序号</th>
+          <th>开始</th>
+          <th>结束</th>
+          <th>文本</th>
+        </tr>
+      </thead>
+      <tbody id="unmatchedRightRows"></tbody>
+    </table>
+
+    <h2 style="margin-top:18px;">CSV 预览</h2>
+    <pre class="preview" id="csvPreview"></pre>
+  </div>
+</div>
+
+<script>
+(function () {
+  const leftEl = document.getElementById("leftSrt");
+  const rightEl = document.getElementById("rightSrt");
+  const errorBox = document.getElementById("errorBox");
+  const resultCard = document.getElementById("resultCard");
+  const okBox = document.getElementById("okBox");
+  const pairRowsEl = document.getElementById("pairRows");
+  const unmatchedLeftRowsEl = document.getElementById("unmatchedLeftRows");
+  const unmatchedRightRowsEl = document.getElementById("unmatchedRightRows");
+  const csvPreviewEl = document.getElementById("csvPreview");
+  const statusEl = document.getElementById("status");
+
+  function showError(message) {
+    errorBox.textContent = message;
+    errorBox.classList.remove("hidden");
+  }
+  function clearAlerts() {
+    errorBox.classList.add("hidden");
+    okBox.classList.add("hidden");
+    errorBox.textContent = "";
+    okBox.textContent = "";
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+  function brText(s) {
+    return escapeHtml(s).replace(/\n/g, "<br>");
+  }
+
+  const EXAMPLE_LEFT =
+    "1\n00:00:01,000 --> 00:00:04,000\n这是一个\n比较长的句子\n\n" +
+    "2\n00:00:05,000 --> 00:00:06,500\n第二句\n\n" +
+    "3\n00:00:08,000 --> 00:00:09,000\n第三句\n\n" +
+    "4\n00:00:20,000 --> 00:00:21,000\n右侧没有对应的句子\n";
+  const EXAMPLE_RIGHT =
+    "1\n00:00:01,000 --> 00:00:02,000\nThis is\n\n" +
+    "2\n00:00:02,000 --> 00:00:04,000\na longer sentence\n\n" +
+    "3\n00:00:05,100 --> 00:00:06,500\nSecond sentence.\n\n" +
+    "4\n00:00:08,000 --> 00:00:09,200\nThird sentence, with a comma.\n";
+
+  document.getElementById("fillExample").addEventListener("click", () => {
+    leftEl.value = EXAMPLE_LEFT;
+    rightEl.value = EXAMPLE_RIGHT;
+    clearAlerts();
+    resultCard.classList.add("hidden");
+  });
+
+  // CSV 单元格转义（RFC 4180）：含逗号、双引号或换行（\n / \r）时整体加引号，
+  // 内部双引号翻倍——多行正文由此保证不破坏行列结构
+  function csvCell(value) {
+    const s = value === null || value === undefined ? "" : String(value);
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  function joinCueField(cues, field) {
+    return cues.map(c => c[field]).join("\n");
+  }
+
+  function buildCsv(data) {
+    const header = [
+      "步骤", "类型", "左输入序号", "左SRT序号", "左开始", "左结束", "左原文",
+      "右输入序号", "右SRT序号", "右开始", "右结束", "右原文",
+      "起始差(ms)", "结束差(ms)", "合并代价(ms)", "跳过代价(ms)", "行代价(ms)"
+    ];
+    const rows = [];
+    for (const p of data.pairs) {
+      rows.push({ step: p.step, cells: [
+        p.step, p.kind,
+        joinCueField(p.left, "cue_order"), joinCueField(p.left, "index"),
+        p.left_start, p.left_end, joinCueField(p.left, "text"),
+        joinCueField(p.right, "cue_order"), joinCueField(p.right, "index"),
+        p.right_start, p.right_end, joinCueField(p.right, "text"),
+        p.start_diff_ms, p.end_diff_ms, p.merge_penalty_ms, "", p.cost
+      ]});
+    }
+    for (const c of data.unmatched_left) {
+      rows.push({ step: c.step, cells: [
+        c.step, "跳过左",
+        c.cue_order, c.index, c.start, c.end, c.text,
+        "", "", "", "", "",
+        "", "", "", c.skip_cost_ms, c.skip_cost_ms
+      ]});
+    }
+    for (const c of data.unmatched_right) {
+      rows.push({ step: c.step, cells: [
+        c.step, "跳过右",
+        "", "", "", "", "",
+        c.cue_order, c.index, c.start, c.end, c.text,
+        "", "", "", c.skip_cost_ms, c.skip_cost_ms
+      ]});
+    }
+    rows.sort((a, b) => a.step - b.step);
+    return [header].concat(rows.map(r => r.cells))
+      .map(r => r.map(csvCell).join(","))
+      .join("\r\n");
+  }
+
+  function renderPairs(data) {
+    pairRowsEl.innerHTML = data.pairs.map(p =>
+      "<tr>" +
+      '<td class="num">' + p.step + "</td>" +
+      '<td><span class="kind">' + escapeHtml(p.kind) + "</span></td>" +
+      '<td class="tc">' + brText(joinCueField(p.left, "index")) + "</td>" +
+      '<td class="tc">' + escapeHtml(p.left_start) + "<br>" + escapeHtml(p.left_end) + "</td>" +
+      "<td>" + brText(joinCueField(p.left, "text")) + "</td>" +
+      '<td class="tc">' + brText(joinCueField(p.right, "index")) + "</td>" +
+      '<td class="tc">' + escapeHtml(p.right_start) + "<br>" + escapeHtml(p.right_end) + "</td>" +
+      "<td>" + brText(joinCueField(p.right, "text")) + "</td>" +
+      '<td class="cost">' + p.start_diff_ms + "</td>" +
+      '<td class="cost">' + p.end_diff_ms + "</td>" +
+      '<td class="cost">' + p.merge_penalty_ms + "</td>" +
+      '<td class="cost">' + p.cost + "</td>" +
+      "</tr>"
+    ).join("");
+  }
+
+  function renderUnmatched(tbodyEl, tableEl, list) {
+    tableEl.classList.toggle("hidden", list.length === 0);
+    tbodyEl.innerHTML = list.map(c =>
+      "<tr>" +
+      '<td class="num">' + c.step + "</td>" +
+      '<td class="num">' + c.cue_order + "</td>" +
+      '<td class="num">' + escapeHtml(c.index) + "</td>" +
+      '<td class="tc">' + escapeHtml(c.start) + "</td>" +
+      '<td class="tc">' + escapeHtml(c.end) + "</td>" +
+      "<td>" + brText(c.text) + "</td>" +
+      "</tr>"
+    ).join("");
+  }
+
+  document.getElementById("submit").addEventListener("click", async () => {
+    clearAlerts();
+    resultCard.classList.add("hidden");
+    if (!leftEl.value.trim()) { showError("请粘贴左侧 SRT 字幕。"); return; }
+    if (!rightEl.value.trim()) { showError("请粘贴右侧 SRT 字幕。"); return; }
+
+    statusEl.textContent = "配对中…";
+    try {
+      const resp = await fetch("/api/bilingual-align", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ left_srt: leftEl.value, right_srt: rightEl.value })
+      });
+      const rawText = await resp.text();
+      let data;
+      try { data = JSON.parse(rawText); }
+      catch (_e) { data = null; }
+      if (!resp.ok) {
+        showError((data && data.detail && data.detail.message) ||
+          ("请求失败（HTTP " + resp.status + "）"));
+        statusEl.textContent = "";
+        return;
+      }
+
+      okBox.textContent =
+        "配对 " + data.pair_count + " 组；左侧未匹配 " + data.unmatched_left_count +
+        " 条，右侧未匹配 " + data.unmatched_right_count + " 条。总代价 " +
+        data.total_cost + " ms（配对 " + data.pair_cost + " ms + 跳过 " +
+        data.skip_cost + " ms）。";
+      okBox.classList.remove("hidden");
+
+      renderPairs(data);
+      renderUnmatched(unmatchedLeftRowsEl, document.getElementById("unmatchedLeftTable"), data.unmatched_left);
+      renderUnmatched(unmatchedRightRowsEl, document.getElementById("unmatchedRightTable"), data.unmatched_right);
+
+      // 页面 CSV 预览与下载共用同一份内容
+      window.__bilingualCsv = buildCsv(data);
+      csvPreviewEl.textContent = window.__bilingualCsv;
+      resultCard.classList.remove("hidden");
+      statusEl.textContent = "";
+    } catch (err) {
+      showError("请求出错：" + err);
+      statusEl.textContent = "";
+    }
+  });
+
+  document.getElementById("download").addEventListener("click", () => {
+    // 前置 BOM 便于 Excel 按 UTF-8 打开中文
+    const content = "\uFEFF" + (window.__bilingualCsv || "");
+    const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "bilingual-align.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+})();
+</script>
+</body>
+</html>

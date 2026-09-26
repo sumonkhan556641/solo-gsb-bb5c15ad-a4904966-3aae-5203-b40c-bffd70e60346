@@ -20,6 +20,7 @@ from .bilingual import (
     align_bilingual,
 )
 from .chapters import ChapterError, plan_chapters
+from .cutavoid import CutAvoidError, avoid_cuts
 from .cutrejoin import CutRejoinError, parse_cuts, rejoin_cues
 from .mapping import AnchorError, PiecewiseMapping, build_anchors
 from .placement import (
@@ -45,15 +46,16 @@ from .topic_clip import (
 STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(
-    title="字幕校正、位置规划、专名统一、阅读负荷、智能断行、章节规划、择优保留、主题片段检索、双语配对与删段接轴工具",
+    title="字幕校正、位置规划、专名统一、阅读负荷、智能断行、章节规划、择优保留、主题片段检索、双语配对、删段接轴与镜头切点避让工具",
     description="粘贴 SRT 后可做时间漂移校正、按画面遮挡时段规划字幕上下位置、"
     "统一专名别名、分析重叠字幕叠加后的阅读负荷热区、按列数 / 行数限制智能断行、"
     "按章节数与优选停顿把整段字幕切成时长均衡的连续章节、"
     "按优先级与最小间隔从重叠字幕中择优保留必须保留条目、"
     "按多组关键词检索覆盖所需字幕条数的最短连续字幕片段、"
     "把左右两份字幕按时间跨度做 1:1 / 1:2 / 2:1 单调配对，"
-    "或按若干删除区间裁切字幕、拆分跨区间条目并按累计删除时长前移接轴。",
-    version="1.9.0",
+    "按若干删除区间裁切字幕、拆分跨区间条目并按累计删除时长前移接轴，"
+    "或在有限挪动范围内整体平移字幕以避开镜头切点并满足相邻最小间隔。",
+    version="1.10.0",
 )
 
 _FIELD_LABELS = {
@@ -74,6 +76,8 @@ _FIELD_LABELS = {
     "left_srt": "左侧 SRT 内容",
     "right_srt": "右侧 SRT 内容",
     "cuts": "删除区间",
+    "cut_points": "镜头切点",
+    "max_move_ms": "最大挪动量",
 }
 
 
@@ -88,7 +92,10 @@ async def validation_exception_handler(
     """
     for err in exc.errors():
         loc = err.get("loc") or ()
+        # 列表元素校验错误（如 cut_points[2]）定位到列表字段本身
         field = loc[-1] if loc else None
+        if len(loc) >= 2 and isinstance(loc[-1], int):
+            field = loc[-2]
         label = _FIELD_LABELS.get(str(field), "请求参数")
         value = err.get("input")
         if isinstance(value, float) and not math.isfinite(value):
@@ -109,6 +116,8 @@ async def validation_exception_handler(
                 message = f"{label}必须为正整数（不小于 1）。"
             else:
                 message = f"{label}不能小于 0。"
+        elif err.get("type") == "less_than_equal":
+            message = f"{label}不能大于 {err.get('ctx', {}).get('le', 2000)} 毫秒。"
         elif err.get("type") == "too_short":
             message = f"{label}至少需要 {err.get('ctx', {}).get('min_length', 1)} 组。"
         elif err.get("type") == "too_long":
@@ -543,6 +552,42 @@ class CutRejoinResponse(BaseModel):
     mapping: list[CutMappingView]
 
 
+class CutAvoidRequest(BaseModel):
+    srt: str = Field(..., description="原始 SRT 内容")
+    cut_points: list[Annotated[StrictInt, Field(ge=0)]] = Field(
+        default_factory=list, description="镜头切点（非负整数毫秒），自动去重并按时间升序处理"
+    )
+    max_move_ms: StrictInt = Field(
+        ..., ge=0, le=2000, description="每条字幕起点前后最大挪动量（0～2000 的整数毫秒）"
+    )
+    min_gap_ms: StrictInt = Field(
+        ..., ge=0, description="相邻字幕之间的最小间隔（非负整数毫秒）"
+    )
+
+
+class CutAvoidCueView(BaseModel):
+    cue_order: int
+    index: str
+    original_start: str
+    original_end: str
+    start: str
+    end: str
+    shift_ms: int
+    text: str
+
+
+class CutAvoidResponse(BaseModel):
+    feasible: bool
+    blocked_order: int | None
+    cut_points: list[int]
+    max_move_ms: int
+    min_gap_ms: int
+    cue_count: int
+    total_shift_ms: int
+    adjusted_srt: str
+    cues: list[CutAvoidCueView]
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -596,6 +641,11 @@ def selection_page() -> FileResponse:
 @app.get("/cut-rejoin")
 def cut_rejoin_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "cut_rejoin.html")
+
+
+@app.get("/cut-avoid")
+def cut_avoid_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "cut_avoid.html")
 
 
 @app.post("/api/correct", response_model=CorrectResponse)
@@ -1225,4 +1275,75 @@ def cut_rejoin(req: CutRejoinRequest) -> CutRejoinResponse | JSONResponse:
         segment_count=len(out_cues),
         cues=cue_views,
         mapping=mapping_views,
+    )
+
+
+@app.post("/api/cut-avoid", response_model=CutAvoidResponse)
+def cut_avoid(req: CutAvoidRequest) -> CutAvoidResponse | JSONResponse:
+    # 1. 复用现有 SRT 解析器
+    try:
+        cues = parse_srt(req.srt)
+    except SrtParseError as exc:
+        raise HTTPException(status_code=422, detail={"type": "srt", "message": str(exc)})
+
+    n = len(cues)
+
+    # 2. 切点校验（非负整数，去重升序）并在有限挪动范围内求最优避让；
+    #    无解时按 HTTP 200、feasible=false 返回最先无法继续安排的字幕序号
+    normalized_cuts = sorted(set(req.cut_points))
+    try:
+        plan = avoid_cuts(cues, req.cut_points, req.max_move_ms, req.min_gap_ms)
+    except CutAvoidError as exc:
+        if exc.blocked_order is None:
+            # 切点本身非法（理论上 Pydantic 已兜底非负整数）
+            raise HTTPException(
+                status_code=422, detail={"type": "cuts", "message": str(exc)}
+            )
+        return CutAvoidResponse(
+            feasible=False,
+            blocked_order=exc.blocked_order,
+            cut_points=normalized_cuts,
+            max_move_ms=req.max_move_ms,
+            min_gap_ms=req.min_gap_ms,
+            cue_count=n,
+            total_shift_ms=0,
+            adjusted_srt="",
+            cues=[],
+        )
+
+    # 3. 每条字幕时长不变（新结束 = 新起点 + 原时长），无损重写时间轴：
+    #    序号、正文、定位参数、空行、BOM 与原有换行风格全部保持原样
+    ranges = [
+        (new_start, new_start + (cue.end - cue.start))
+        for cue, new_start in zip(cues, plan.starts)
+    ]
+    try:
+        result_srt = rewrite_srt(req.srt, ranges)
+    except SrtParseError as exc:
+        raise HTTPException(status_code=422, detail={"type": "srt", "message": str(exc)})
+
+    cue_views = [
+        CutAvoidCueView(
+            cue_order=pos,
+            index=cue.index,
+            original_start=format_timecode(cue.start),
+            original_end=format_timecode(cue.end),
+            start=format_timecode(new_start),
+            end=format_timecode(new_end),
+            shift_ms=new_start - cue.start,
+            text=cue.text,
+        )
+        for pos, (cue, (new_start, new_end)) in enumerate(zip(cues, ranges), start=1)
+    ]
+
+    return CutAvoidResponse(
+        feasible=True,
+        blocked_order=None,
+        cut_points=list(plan.cuts),
+        max_move_ms=req.max_move_ms,
+        min_gap_ms=req.min_gap_ms,
+        cue_count=n,
+        total_shift_ms=plan.total_shift_ms,
+        adjusted_srt=result_srt,
+        cues=cue_views,
     )

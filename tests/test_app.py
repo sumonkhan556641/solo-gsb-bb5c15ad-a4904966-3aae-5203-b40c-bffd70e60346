@@ -12,6 +12,12 @@ from app.bilingual import (
     align_bilingual,
 )
 from app.chapters import ChapterError, plan_chapters
+from app.cutavoid import (
+    CutAvoidError,
+    avoid_cuts,
+    first_blocked_order,
+    normalize_cuts,
+)
 from app.cutrejoin import (
     DROPPED,
     KEPT,
@@ -2735,3 +2741,210 @@ def test_api_cut_rejoin_requires_fields_and_nonempty_cuts():
     resp = client.post("/api/cut-rejoin", json={"srt": CUTREJOIN_SRT, "cuts": []})
     assert resp.status_code == 422
     assert resp.json()["detail"]["field"] == "cuts"
+
+
+# ---------- 镜头切点避让 ----------
+
+CUTAVOID_SRT = (
+    "1\n00:00:05,000 --> 00:00:07,000\n开场字幕\n\n"
+    "2\n00:00:08,000 --> 00:00:10,000\n第二句字幕\n\n"
+    "3\n00:00:16,000 --> 00:00:19,000\n第三句字幕\n\n"
+    "4\n00:00:22,000 --> 00:00:25,000\n结尾字幕\n"
+)
+CUTAVOID_POINTS = [7000, 9000, 17000, 25000]
+
+
+def test_normalize_cuts_dedup_and_sort():
+    assert normalize_cuts([3000, 1000, 3000, 0]) == (0, 1000, 3000)
+    assert normalize_cuts([]) == ()
+    with pytest.raises(CutAvoidError, match="第 2 个镜头切点"):
+        normalize_cuts([1, -1])
+
+
+def test_avoid_cuts_boundary_coincidence_is_free():
+    # 切点全部落在原边界上（开始或结束）：M=0 即可，零挪动
+    cues = parse_srt(CUTAVOID_SRT)
+    plan = avoid_cuts(cues, [5000, 7000, 8000, 10000, 25000], 0, 0)
+    assert plan.starts == (5000, 8000, 16000, 22000)
+    assert plan.total_shift_ms == 0
+
+
+def test_avoid_cuts_shifts_within_window():
+    cues = parse_srt(CUTAVOID_SRT)
+    # 9000 在第 2 条 [8000,10000) 内部：前移到 7000（切点边界）；
+    # 17000 在第 3 条 [16000,19000) 内部：后移到 17000（切点边界）；
+    # 25000 恰为第 4 条结束边界，不冲突
+    plan = avoid_cuts(cues, CUTAVOID_POINTS, 2000, 0)
+    assert plan.starts == (5000, 7000, 17000, 22000)
+    assert plan.total_shift_ms == 2000
+
+
+def test_avoid_cuts_lexicographic_tie_break():
+    # 原间隔 1000 < 要求的 2000：要么第 1 条前移到 4000、要么第 2 条后移到 9000，
+    # 代价同为 1000；同分取新起点序列字典序最小者
+    cues = parse_srt(CUTAVOID_SRT)
+    plan = avoid_cuts(cues, [], 2000, 2000)
+    assert plan.starts == (4000, 8000, 16000, 22000)
+    assert plan.total_shift_ms == 1000
+    for i in range(3):
+        end_i = plan.starts[i] + (cues[i].end - cues[i].start)
+        assert plan.starts[i + 1] - end_i >= 2000
+
+
+def test_avoid_cuts_new_start_floor_zero():
+    cues = parse_srt("1\n00:00:00,500 --> 00:00:03,500\n靠近片头\n")
+    # 切点 1000 在原区间内部；禁区为 [0, 999]，窗口 [0, 2500] 内最小可行起点为 1000
+    plan = avoid_cuts(cues, [1000], 2000, 0)
+    assert plan.starts == (1000,)
+    assert plan.total_shift_ms == 500
+
+
+def test_avoid_cuts_infeasible_reports_first_blocked_order():
+    cues = parse_srt(CUTAVOID_SRT)
+    # M=500 时第 2 条窗口 [7500,8500]（时长 2000）整体被切点 9000 覆盖，
+    # 且第 1 条保持原安排时第 2 条无法更早
+    with pytest.raises(CutAvoidError) as exc_info:
+        avoid_cuts(cues, [9000], 500, 0)
+    assert exc_info.value.blocked_order == 2
+
+    # 第一条自身无解时序号为 1（M=0，切点落在内部）
+    with pytest.raises(CutAvoidError) as exc_info:
+        avoid_cuts(cues, [6000], 0, 0)
+    assert exc_info.value.blocked_order == 1
+
+    # 贪心可行性判定与之一致
+    assert first_blocked_order(cues, (9000,), 500, 0) == 2
+    assert first_blocked_order(cues, (), 2000, 0) is None
+
+
+def test_avoid_cuts_min_gap_infeasible_reports_first_blocked_order():
+    # 两条紧邻 [0,2000) [2000,3000)，要求间隔 1000 且 M=0：第 2 条窗口只有 2000
+    cues = parse_srt(
+        "1\n00:00:00,000 --> 00:00:02,000\n一\n\n"
+        "2\n00:00:02,000 --> 00:00:03,000\n二\n"
+    )
+    with pytest.raises(CutAvoidError) as exc_info:
+        avoid_cuts(cues, [], 0, 1000)
+    assert exc_info.value.blocked_order == 2
+
+
+def test_cut_avoid_page_served():
+    resp = client.get("/cut-avoid")
+    assert resp.status_code == 200
+    assert "镜头切点避让" in resp.text
+    assert "/api/cut-avoid" in resp.text
+
+
+def cutavoid_body(**overrides):
+    body = {
+        "srt": CUTAVOID_SRT,
+        "cut_points": CUTAVOID_POINTS,
+        "max_move_ms": 2000,
+        "min_gap_ms": 0,
+    }
+    body.update(overrides)
+    return body
+
+
+def test_api_cut_avoid_success_lossless_timeline_only():
+    resp = client.post("/api/cut-avoid", json=cutavoid_body())
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["feasible"] is True
+    assert data["blocked_order"] is None
+    assert data["cut_points"] == [7000, 9000, 17000, 25000]
+    assert data["cue_count"] == 4
+    assert data["total_shift_ms"] == 2000
+    assert [(c["cue_order"], c["shift_ms"]) for c in data["cues"]] == [
+        (1, 0), (2, -1000), (3, 1000), (4, 0)
+    ]
+    # 时长不变
+    for c in data["cues"]:
+        assert parse_timecode(c["end"]) - parse_timecode(c["start"]) == (
+            parse_timecode(c["original_end"]) - parse_timecode(c["original_start"])
+        )
+    # 只改时间轴：序号、正文、LF 换行全部保留
+    assert data["adjusted_srt"] == (
+        "1\n00:00:05,000 --> 00:00:07,000\n开场字幕\n\n"
+        "2\n00:00:07,000 --> 00:00:09,000\n第二句字幕\n\n"
+        "3\n00:00:17,000 --> 00:00:20,000\n第三句字幕\n\n"
+        "4\n00:00:22,000 --> 00:00:25,000\n结尾字幕\n"
+    )
+
+
+def test_api_cut_avoid_preserves_crlf_and_no_change_is_identity():
+    srt = "1\r\n00:00:01,000 --> 00:00:03,000\r\n原封不动\r\n"
+    # 切点恰为结束边界、零挪动量：输出与输入逐字符一致（含 CRLF）
+    body = cutavoid_body(srt=srt, cut_points=[3000], max_move_ms=0, min_gap_ms=0)
+    data = client.post("/api/cut-avoid", json=body).json()
+    assert data["feasible"] is True
+    assert data["total_shift_ms"] == 0
+    assert data["adjusted_srt"] == srt
+
+
+def test_api_cut_avoid_empty_cut_points_needs_no_movement():
+    resp = client.post(
+        "/api/cut-avoid",
+        json=cutavoid_body(cut_points=[], max_move_ms=0, min_gap_ms=0),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["feasible"] is True
+    assert data["cut_points"] == []
+    assert data["total_shift_ms"] == 0
+    assert [c["shift_ms"] for c in data["cues"]] == [0, 0, 0, 0]
+    assert data["adjusted_srt"] == CUTAVOID_SRT
+
+
+def test_api_cut_avoid_infeasible_returns_blocked_order_http_200():
+    resp = client.post(
+        "/api/cut-avoid", json=cutavoid_body(cut_points=[9000], max_move_ms=500)
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["feasible"] is False
+    assert data["blocked_order"] == 2
+    assert data["adjusted_srt"] == ""
+    assert data["cues"] == []
+    assert data["total_shift_ms"] == 0
+
+
+def test_api_cut_avoid_validates_fields():
+    # 负切点
+    resp = client.post(
+        "/api/cut-avoid", json=cutavoid_body(cut_points=[-1])
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["field"] == "cut_points"
+
+    # 最大挪动量超过 2000
+    resp = client.post(
+        "/api/cut-avoid", json=cutavoid_body(max_move_ms=2001)
+    )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["field"] == "max_move_ms"
+    assert "2000" in detail["message"]
+
+    # 小数最大挪动量
+    resp = client.post(
+        "/api/cut-avoid", json=cutavoid_body(max_move_ms=1.5)
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["field"] == "max_move_ms"
+
+    # 负最小间隔
+    resp = client.post(
+        "/api/cut-avoid", json=cutavoid_body(min_gap_ms=-1)
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["field"] == "min_gap_ms"
+
+    # 缺字段
+    assert client.post("/api/cut-avoid", json={"srt": CUTAVOID_SRT}).status_code == 422
+
+
+def test_api_cut_avoid_rejects_bad_srt():
+    resp = client.post("/api/cut-avoid", json=cutavoid_body(srt="garbage"))
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["type"] == "srt"

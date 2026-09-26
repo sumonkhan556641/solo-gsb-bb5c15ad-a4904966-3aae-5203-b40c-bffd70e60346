@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>镜头切点避让</title>
+<style>
+  :root {
+    --bg: #f4f6fa;
+    --card: #ffffff;
+    --border: #d9dee8;
+    --text: #1f2733;
+    --muted: #6b7686;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --danger: #dc2626;
+    --danger-bg: #fef2f2;
+    --ok-bg: #f0fdf4;
+    --ok-border: #16a34a;
+    --move-bg: #fffbeb;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .nav { margin: 0 0 16px; font-size: 14px; }
+  .nav a { color: var(--primary); text-decoration: none; margin-right: 16px; }
+  .nav a:hover { text-decoration: underline; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  .hint { color: var(--muted); font-weight: 400; font-size: 13px; }
+  textarea {
+    width: 100%;
+    min-height: 220px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: 13px/1.6 var(--mono);
+    resize: vertical;
+  }
+  textarea.short { min-height: 72px; }
+  textarea:focus, input:focus { outline: 2px solid rgba(37, 99, 235, .35); border-color: var(--primary); }
+  input[type="number"] {
+    width: 180px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font: 14px var(--mono);
+  }
+  .params { display: flex; gap: 24px; align-items: flex-end; flex-wrap: wrap; }
+  .params .field label { font-size: 14px; }
+  button {
+    border: 1px solid var(--border);
+    background: #fff;
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:hover { background: #f1f4f9; }
+  button.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+    font-weight: 600;
+    padding: 10px 22px;
+  }
+  button.primary:hover { background: var(--primary-hover); }
+  .toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+  .alert {
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    white-space: pre-wrap;
+  }
+  .alert.error { background: var(--danger-bg); border: 1px solid var(--danger); color: var(--danger); }
+  .alert.ok { background: var(--ok-bg); border: 1px solid var(--ok-border); color: #166534; }
+  .hidden { display: none; }
+  table.cues { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+  table.cues th, table.cues td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+  table.cues th { background: #f8fafc; }
+  table.cues td.num { width: 56px; color: var(--muted); text-align: right; }
+  table.cues td.tc { font-family: var(--mono); white-space: nowrap; }
+  table.cues td.off { font-family: var(--mono); text-align: right; white-space: nowrap; }
+  tr.moved td { background: var(--move-bg); }
+  .off.neg { color: #166534; }
+  .off.pos { color: #b45309; }
+  .preview {
+    width: 100%;
+    max-height: 320px;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: 12px/1.6 var(--mono);
+    background: #fafbfc;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="nav">
+    <a href="/">字幕时间漂移校正</a>
+    <a href="/placement">字幕位置规划</a>
+    <a href="/reading-load">阅读负荷热区</a>
+    <a href="/terms">字幕专名统一</a>
+    <a href="/wrap">字幕智能断行</a>
+    <a href="/chapters">字幕章节规划</a>
+    <a href="/topic-clip">主题短片段检索</a>
+    <a href="/bilingual-align">双语字幕配对</a>
+    <a href="/selection">重叠字幕择优保留</a>
+    <a href="/cut-rejoin">删段后字幕接轴</a>
+  </p>
+  <h1>镜头切点避让</h1>
+  <p class="sub">粘贴 SRT，输入镜头切点（非负整数毫秒）、每条字幕起点允许的最大挪动量（0～2000 毫秒）
+    与相邻字幕的最小间隔（非负整数毫秒）。系统按输入顺序保留每条字幕的时长与正文，只在原起点前后
+    最大挪动量内按整毫秒平移（新起点不得小于 0）：切点可与字幕边界重合，但不得落在字幕内部，
+    相邻字幕须满足最小间隔。在所有可行方案中，起点挪动绝对值之和最小；同分取新起点序列字典序
+    最小的方案。无解时指出最先无法继续安排的字幕输入序号。</p>
+
+  <div class="card">
+    <label for="srt">原始 SRT 字幕</label>
+    <textarea id="srt" placeholder="1&#10;00:00:00,800 --> 00:00:02,200&#10;第一句字幕&#10;&#10;2&#10;00:00:02,600 --> 00:00:04,000&#10;第二句字幕"></textarea>
+  </div>
+
+  <div class="card">
+    <h2>避让参数
+      <span class="hint">切点按集合生效（自动排序去重）；挪动量与间隔均为整数毫秒</span>
+    </h2>
+    <div class="params" style="margin-bottom: 14px;">
+      <div class="field">
+        <label for="maxShift">最大挪动量（0～2000 毫秒）</label>
+        <input type="number" id="maxShift" min="0" max="2000" step="1" value="500">
+      </div>
+      <div class="field">
+        <label for="minGap">最小字幕间隔（非负整数毫秒）</label>
+        <input type="number" id="minGap" min="0" step="1" value="0">
+      </div>
+      <button type="button" id="fillExample">填入示例</button>
+    </div>
+    <label for="cuts">镜头切点（毫秒） <span class="hint">每行一个或用空格 / 逗号分隔的非负整数，例如「1500」；可留空表示没有切点</span></label>
+    <textarea id="cuts" class="short" placeholder="1500&#10;4200"></textarea>
+  </div>
+
+  <div id="errorBox" class="alert error hidden"></div>
+
+  <div class="toolbar" style="margin-bottom: 20px;">
+    <button type="button" class="primary" id="submit">避让</button>
+    <span class="hint" id="status"></span>
+  </div>
+
+  <div id="resultCard" class="card hidden">
+    <h2>避让结果</h2>
+    <div id="okBox" class="alert ok hidden"></div>
+    <div class="toolbar" style="margin-top:0;">
+      <button type="button" class="primary" id="download">下载 adjusted.srt</button>
+      <span class="hint">下载内容仅替换各时间轴行的起止时间码：序号、正文、定位参数、空行、换行与 BOM 保持原样。</span>
+    </div>
+
+    <h2 style="margin-top:18px;">逐条字幕</h2>
+    <table class="cues">
+      <thead>
+        <tr>
+          <th>输入序号</th>
+          <th>SRT 序号</th>
+          <th>原时间</th>
+          <th>新时间</th>
+          <th>偏移（毫秒）</th>
+          <th>正文</th>
+        </tr>
+      </thead>
+      <tbody id="cueRows"></tbody>
+    </table>
+
+    <h2 style="margin-top:18px;">避让后 SRT 预览</h2>
+    <pre class="preview" id="srtPreview"></pre>
+  </div>
+</div>
+
+<script>
+(function () {
+  const srtEl = document.getElementById("srt");
+  const cutsEl = document.getElementById("cuts");
+  const maxShiftEl = document.getElementById("maxShift");
+  const minGapEl = document.getElementById("minGap");
+  const errorBox = document.getElementById("errorBox");
+  const resultCard = document.getElementById("resultCard");
+  const okBox = document.getElementById("okBox");
+  const cueRowsEl = document.getElementById("cueRows");
+  const srtPreviewEl = document.getElementById("srtPreview");
+  const statusEl = document.getElementById("status");
+
+  function showError(message) {
+    errorBox.textContent = message;
+    errorBox.classList.remove("hidden");
+  }
+  function clearAlerts() {
+    errorBox.classList.add("hidden");
+    okBox.classList.add("hidden");
+    errorBox.textContent = "";
+    okBox.textContent = "";
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+
+  // 允许每行一个或多个切点（空白 / 逗号 / 中文逗号分隔）
+  function parseCutPoints(text) {
+    const tokens = text.split(/[\s,，、;；]+/).filter(Boolean);
+    const out = [];
+    for (const token of tokens) {
+      if (!/^\d+$/.test(token)) {
+        throw new Error("镜头切点「" + token + "」不是非负整数毫秒。");
+      }
+      out.push(Number(token));
+    }
+    return out;
+  }
+
+  function parseNonNegativeInt(raw, label, max) {
+    if (!/^\d+$/.test(raw)) throw new Error(label + "必须是非负整数毫秒。");
+    const value = Number(raw);
+    if (max !== undefined && value > max) {
+      throw new Error(label + "不能大于 " + max + "。");
+    }
+    return value;
+  }
+
+  function formatOffset(ms) {
+    if (ms > 0) return "+" + ms;
+    if (ms < 0) return "−" + (-ms);
+    return "0";
+  }
+
+  const EXAMPLE_SRT =
+    "1\n00:00:00,800 --> 00:00:02,200\n各位观众晚上好\n\n" +
+    "2\n00:00:02,600 --> 00:00:04,000\n欢迎收看本期节目\n\n" +
+    "3\n00:00:04,200 --> 00:00:05,600\n今天聊一个轻松的话题\n\n" +
+    "4\n00:00:05,700 --> 00:00:07,100\n先从最近的见闻说起\n";
+
+  document.getElementById("fillExample").addEventListener("click", () => {
+    srtEl.value = EXAMPLE_SRT;
+    cutsEl.value = "1200\n3000\n4600\n6200";
+    maxShiftEl.value = "500";
+    minGapEl.value = "100";
+    clearAlerts();
+    resultCard.classList.add("hidden");
+  });
+
+  function render(data) {
+    cueRowsEl.innerHTML = data.cues.map(c => {
+      const moved = c.offset_ms !== 0;
+      const offCls = c.offset_ms > 0 ? "pos" : (c.offset_ms < 0 ? "neg" : "");
+      return '<tr class="' + (moved ? "moved" : "") + '">' +
+        '<td class="num">' + c.cue_order + "</td>" +
+        '<td class="num">' + escapeHtml(c.index) + "</td>" +
+        '<td class="tc">' + escapeHtml(c.original_start) + "<br>" + escapeHtml(c.original_end) + "</td>" +
+        '<td class="tc">' + escapeHtml(c.new_start) + "<br>" + escapeHtml(c.new_end) + "</td>" +
+        '<td class="off ' + offCls + '">' + formatOffset(c.offset_ms) + "</td>" +
+        "<td>" + escapeHtml(c.text).replace(/\n/g, "<br>") + "</td>" +
+        "</tr>";
+    }).join("");
+
+    srtPreviewEl.textContent = data.adjusted_srt;
+    okBox.textContent =
+      "共 " + data.cue_count + " 条字幕：" + data.moved_count + " 条发生挪动，" +
+      "起点挪动绝对值之和 " + data.total_shift_ms + " 毫秒" +
+      "（切点 " + data.cut_points_ms.length + " 个，最大挪动量 ±" + data.max_shift_ms +
+      " ms，最小间隔 " + data.min_gap_ms + " ms）。";
+    okBox.classList.remove("hidden");
+  }
+
+  document.getElementById("submit").addEventListener("click", async () => {
+    clearAlerts();
+    resultCard.classList.add("hidden");
+
+    let cutPoints, maxShift, minGap;
+    try {
+      cutPoints = parseCutPoints(cutsEl.value);
+      maxShift = parseNonNegativeInt(maxShiftEl.value.trim(), "最大挪动量", 2000);
+      minGap = parseNonNegativeInt(minGapEl.value.trim(), "最小字幕间隔");
+    } catch (err) {
+      showError(err.message);
+      return;
+    }
+
+    statusEl.textContent = "避让中…";
+    try {
+      const resp = await fetch("/api/shot-cut", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          srt: srtEl.value,
+          cut_points_ms: cutPoints,
+          max_shift_ms: maxShift,
+          min_gap_ms: minGap
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        showError((data.detail && data.detail.message) || ("请求失败（HTTP " + resp.status + "）"));
+        statusEl.textContent = "";
+        return;
+      }
+      if (!data.feasible) {
+        showError(
+          "无解：第 " + data.first_unschedulable_cue_order + " 条字幕（输入序号）最先无法继续安排。" +
+          "前 " + (data.first_unschedulable_cue_order - 1) + " 条均可安排，但加入该条后，" +
+          "在 ±" + data.max_shift_ms + " ms 挪动量、" + data.min_gap_ms +
+          " ms 最小间隔与切点避让约束下不存在可行方案；请增大最大挪动量、减小最小间隔或调整切点。"
+        );
+        statusEl.textContent = "";
+        return;
+      }
+
+      // 预览与下载共用接口返回的同一份 adjusted_srt
+      window.__adjustedSrt = data.adjusted_srt;
+      render(data);
+      resultCard.classList.remove("hidden");
+      statusEl.textContent = "";
+    } catch (err) {
+      showError("请求出错：" + err);
+      statusEl.textContent = "";
+    }
+  });
+
+  document.getElementById("download").addEventListener("click", () => {
+    const content = window.__adjustedSrt || "";
+    const blob = new Blob([content], { type: "application/x-subrip;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "adjusted.srt";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+})();
+</script>
+</body>
+</html>

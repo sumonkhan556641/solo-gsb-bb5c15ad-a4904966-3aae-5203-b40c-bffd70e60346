@@ -49,6 +49,7 @@ from app.placement import (
 )
 from app.reading_load import count_display_chars, find_reading_zones
 from app.selection import ConflictPair, SelectionError, SelectionPlan, select_cues
+from app.shotcut import ShotCutError, plan_avoidance
 from app.srt import BOM, Cue, SrtParseError, format_srt, parse_document, parse_srt, rewrite_srt
 from app.terms import TermError, TermRule, apply_terms, build_rules, scan_line
 from app.timecode import format_timecode, parse_timecode
@@ -2735,3 +2736,388 @@ def test_api_cut_rejoin_requires_fields_and_nonempty_cuts():
     resp = client.post("/api/cut-rejoin", json={"srt": CUTREJOIN_SRT, "cuts": []})
     assert resp.status_code == 422
     assert resp.json()["detail"]["field"] == "cuts"
+
+
+# ---------- 镜头切点避让 ----------
+
+
+def _shot_cue(start, end, index="1"):
+    return Cue(index=index, start=start, end=end, text="x")
+
+
+def test_avoid_no_cut_keeps_original():
+    cues = [_shot_cue(1000, 2000), _shot_cue(3000, 4000)]
+    plan = plan_avoidance(cues, [], 500, 0)
+    assert plan.feasible
+    assert plan.starts == (1000, 3000)
+    assert plan.total_shift_ms == 0
+
+
+def test_avoid_cut_inside_shifts_to_boundary():
+    # 切点 1500 落在 [1000,2400) 内部；±500 内只有起点对齐切点 1500 可行
+    cues = [_shot_cue(1000, 2400)]
+    plan = plan_avoidance(cues, [1500], 500, 0)
+    assert plan.feasible
+    assert plan.starts == (1500,)
+    assert plan.total_shift_ms == 500
+
+
+def test_avoid_cut_at_start_or_end_boundary_needs_no_shift():
+    # 切点恰为原起点 1000、原结束 2400：均与边界重合，允许，不挪动
+    cues = [_shot_cue(1000, 2400)]
+    plan = plan_avoidance(cues, [1000, 2400], 500, 0)
+    assert plan.feasible
+    assert plan.starts == (1000,)
+    assert plan.total_shift_ms == 0
+
+
+def test_avoid_tie_prefers_smaller_new_start():
+    # 域 [800,1200] 内切点 1200 只留下两端 800（结束对齐）与 1200（起点对齐），
+    # 挪动绝对值都是 200，同分取新起点序列字典序较小者 800
+    cues = [_shot_cue(1000, 1400)]
+    plan = plan_avoidance(cues, [1200], 200, 0)
+    assert plan.feasible
+    assert plan.starts == (800,)
+    assert plan.total_shift_ms == 200
+
+
+def test_avoid_min_gap_and_lex_across_two_cues():
+    # 最小间隔 300：x2 ≥ x1 + 1300；总挪动 200 的方案里 x1 可取 800/900/1000，
+    # 字典序取 x1=800、x2=2100（不是各自留在原位的 1000/2300）
+    cues = [_shot_cue(1000, 2000), _shot_cue(2100, 3000)]
+    plan = plan_avoidance(cues, [], 500, 300)
+    assert plan.feasible
+    assert plan.starts == (800, 2100)
+    assert plan.total_shift_ms == 200
+
+
+def test_avoid_new_start_clamped_at_zero():
+    # 原起点 100、M=500：下界截断到 0；切点 600 仅允许 x=0（结束对齐切点）
+    cues = [_shot_cue(100, 700)]
+    plan = plan_avoidance(cues, [600], 500, 0)
+    assert plan.feasible
+    assert plan.starts == (0,)
+
+
+def test_avoid_infeasible_cue_itself_locked_reports_one():
+    cues = [_shot_cue(1200, 2200)]
+    plan = plan_avoidance(cues, [1600], 300, 0)
+    assert not plan.feasible
+    assert plan.first_unschedulable_order == 1
+
+
+def test_avoid_infeasible_reports_first_unschedulable():
+    # 第 2 条 d=1000、域 [900,1500] 被切点 1600 的禁止开区间 (600,1600) 全覆盖
+    cues = [_shot_cue(0, 500), _shot_cue(1200, 2200)]
+    plan = plan_avoidance(cues, [1600], 300, 0)
+    assert not plan.feasible
+    assert plan.first_unschedulable_order == 2
+
+
+def test_avoid_infeasible_gap_chain_reports_third():
+    # 前两条在间隔 200 下可排（x2=1200），第 3 条需要 ≥2400 但上界只有 2300
+    cues = [_shot_cue(0, 1000), _shot_cue(1100, 2100), _shot_cue(2200, 3200)]
+    plan = plan_avoidance(cues, [], 100, 200)
+    assert not plan.feasible
+    assert plan.first_unschedulable_order == 3
+
+
+def test_avoid_duplicate_cut_points_ignored():
+    cues = [_shot_cue(1000, 2400)]
+    plan = plan_avoidance(cues, [1500, 1500, 1500], 500, 0)
+    assert plan.feasible
+    assert plan.starts == (1500,)
+
+
+def test_avoid_param_validation():
+    cues = [_shot_cue(0, 1000)]
+    with pytest.raises(ShotCutError):
+        plan_avoidance(cues, [-1], 100, 0)
+    with pytest.raises(ShotCutError):
+        plan_avoidance(cues, [], 2001, 0)
+    with pytest.raises(ShotCutError):
+        plan_avoidance(cues, [], -1, 0)
+    with pytest.raises(ShotCutError):
+        plan_avoidance(cues, [], 100, -1)
+
+
+def _brute_avoid(cues, cuts, max_shift, min_gap):
+    """暴力枚举所有起点组合，返回 (最小总挪动, 字典序最小起点序列) 或 None。"""
+    n = len(cues)
+    starts = [c.start for c in cues]
+    durs = [c.end - c.start for c in cues]
+    domains = []
+    for i in range(n):
+        lo = max(0, starts[i] - max_shift)
+        hi = starts[i] + max_shift
+        domains.append([
+            x for x in range(lo, hi + 1)
+            if all(not (x < c < x + durs[i]) for c in cuts)
+        ])
+
+    best = None
+
+    def rec(i, bound, acc, seq):
+        nonlocal best
+        if best is not None and acc > best[0]:
+            return
+        if i == n:
+            key = (acc, tuple(seq))
+            if best is None or key < best:
+                best = key
+            return
+        for x in domains[i]:
+            if x >= bound:
+                rec(i + 1, x + durs[i] + min_gap, acc + abs(x - starts[i]), seq + [x])
+
+    rec(0, 0, 0, [])
+    return best
+
+
+def _brute_first_unschedulable(cues, cuts, max_shift, min_gap):
+    n = len(cues)
+    starts = [c.start for c in cues]
+    durs = [c.end - c.start for c in cues]
+    for k in range(1, n + 1):
+        domains = []
+        for i in range(k):
+            lo = max(0, starts[i] - max_shift)
+            hi = starts[i] + max_shift
+            domains.append([
+                x for x in range(lo, hi + 1)
+                if all(not (x < c < x + durs[i]) for c in cuts)
+            ])
+        reach = set(domains[0])
+        if not reach:
+            return k
+        for i in range(1, k):
+            reach = {
+                x for x in domains[i]
+                if any(x >= p + durs[i - 1] + min_gap for p in reach)
+            }
+            if not reach:
+                return k
+    return None
+
+
+def test_avoid_matches_bruteforce_on_random_small():
+    rng = random.Random(20260926)
+    for _ in range(500):
+        n = rng.randint(1, 5)
+        cues = []
+        for k in range(n):
+            s = rng.randint(0, 40)
+            cues.append(_shot_cue(s, s + rng.randint(1, 12), index=str(k + 1)))
+        max_shift = rng.randint(0, 8)
+        min_gap = rng.randint(0, 6)
+        cuts = sorted(rng.sample(range(0, 60), rng.randint(0, 4)))
+
+        plan = plan_avoidance(cues, cuts, max_shift, min_gap)
+        best = _brute_avoid(cues, cuts, max_shift, min_gap)
+        if best is None:
+            assert not plan.feasible
+            assert plan.first_unschedulable_order == _brute_first_unschedulable(
+                cues, cuts, max_shift, min_gap
+            )
+            continue
+
+        assert plan.feasible
+        assert plan.total_shift_ms == best[0]
+        assert plan.starts == best[1]
+        # 可行解的全部约束与目标自洽
+        durs = [c.end - c.start for c in cues]
+        for i, x in enumerate(plan.starts):
+            s, d = cues[i].start, durs[i]
+            assert x >= 0
+            assert abs(x - s) <= max_shift
+            assert all(not (x < c < x + d) for c in cuts)
+            if i > 0:
+                assert plan.starts[i - 1] + durs[i - 1] + min_gap <= x
+        assert plan.total_shift_ms == sum(abs(x - c.start) for x, c in zip(plan.starts, cues))
+
+
+SHOTCUT_SRT = (
+    "1\n00:00:01,000 --> 00:00:02,400\n第一句\n\n"
+    "2\n00:00:03,000 --> 00:00:04,000\n第二句\n"
+)
+
+
+def shotcut_body(**overrides):
+    body = {
+        "srt": SHOTCUT_SRT,
+        "cut_points_ms": [1500],
+        "max_shift_ms": 500,
+        "min_gap_ms": 0,
+    }
+    body.update(overrides)
+    return body
+
+
+def test_shot_cut_page_served():
+    resp = client.get("/shot-cut")
+    assert resp.status_code == 200
+    assert "镜头切点避让" in resp.text
+    assert "/api/shot-cut" in resp.text
+
+
+def test_api_shot_cut_success():
+    resp = client.post("/api/shot-cut", json=shotcut_body())
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["feasible"] is True
+    assert data["first_unschedulable_cue_order"] is None
+    assert data["cue_count"] == 2
+    assert data["cut_points_ms"] == [1500]
+    assert data["total_shift_ms"] == 500
+    assert data["moved_count"] == 1
+    assert [c["offset_ms"] for c in data["cues"]] == [500, 0]
+    c1 = data["cues"][0]
+    assert c1["original_start"] == "00:00:01,000"
+    assert c1["original_end"] == "00:00:02,400"
+    assert c1["new_start"] == "00:00:01,500"
+    assert c1["new_end"] == "00:00:02,900"
+    # 只改时间轴：时长与正文保留
+    assert c1["text"] == "第一句"
+    assert data["adjusted_srt"] == (
+        "1\n00:00:01,500 --> 00:00:02,900\n第一句\n\n"
+        "2\n00:00:03,000 --> 00:00:04,000\n第二句\n"
+    )
+
+
+def test_api_shot_cut_min_gap_pushes_second_cue():
+    # 最小间隔 600：x2 ≥ 1500 + 1400 + 600 = 3500
+    data = client.post(
+        "/api/shot-cut", json=shotcut_body(min_gap_ms=600)
+    ).json()
+    assert data["feasible"] is True
+    assert [c["offset_ms"] for c in data["cues"]] == [500, 500]
+    assert data["cues"][1]["new_start"] == "00:00:03,500"
+    assert data["cues"][1]["new_end"] == "00:00:04,500"
+    assert data["total_shift_ms"] == 1000
+    assert data["moved_count"] == 2
+
+
+def test_api_shot_cut_cut_points_sorted_deduped():
+    data = client.post(
+        "/api/shot-cut", json=shotcut_body(cut_points_ms=[4200, 1500, 1500])
+    ).json()
+    assert data["cut_points_ms"] == [1500, 4200]
+    assert data["feasible"] is True
+
+
+def test_api_shot_cut_empty_cut_points_allowed():
+    # 切点列表可省略：只受最大挪动量与最小间隔约束
+    resp = client.post(
+        "/api/shot-cut",
+        json={"srt": SHOTCUT_SRT, "max_shift_ms": 500, "min_gap_ms": 0},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["feasible"] is True
+    assert data["cut_points_ms"] == []
+    assert data["total_shift_ms"] == 0
+
+
+def test_api_shot_cut_lossless_rewrite_preserves_format():
+    srt = (
+        BOM + "1\r\n"
+        "00:00:01,100 --> 00:00:02,100 X1:10 X2:20\r\n"
+        "第一行\r\n第二行\r\n"
+        "\r\n"
+        "2\r\n"
+        "00:00:03,000 --> 00:00:04,000\r\n"
+        "第三句\r\n"
+    )
+    # 第 1 条 [1100,2100)、切点 1500、M=500：可行起点只剩 1500..1600，取 1500
+    resp = client.post("/api/shot-cut", json=shotcut_body(
+        srt=srt, cut_points_ms=[1500], max_shift_ms=500, min_gap_ms=0
+    ))
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["cues"][0]["offset_ms"] == 400
+    assert data["adjusted_srt"] == (
+        BOM + "1\r\n"
+        "00:00:01,500 --> 00:00:02,500 X1:10 X2:20\r\n"
+        "第一行\r\n第二行\r\n"
+        "\r\n"
+        "2\r\n"
+        "00:00:03,000 --> 00:00:04,000\r\n"
+        "第三句\r\n"
+    )
+
+
+def test_api_shot_cut_infeasible_is_200_with_order():
+    # 第 2 条 [1200,2200) 在 M=300 下被切点 1600 完全锁死
+    srt = (
+        "1\n00:00:00,000 --> 00:00:00,500\n第一句\n\n"
+        "2\n00:00:01,200 --> 00:00:02,200\n第二句\n"
+    )
+    resp = client.post("/api/shot-cut", json=shotcut_body(
+        srt=srt, cut_points_ms=[1600], max_shift_ms=300
+    ))
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["feasible"] is False
+    assert data["first_unschedulable_cue_order"] == 2
+    assert data["cues"] == []
+    assert data["adjusted_srt"] == ""
+    assert data["total_shift_ms"] == 0
+    # 参数仍回显
+    assert data["max_shift_ms"] == 300
+    assert data["cut_points_ms"] == [1600]
+
+
+def test_api_shot_cut_rejects_bad_srt():
+    resp = client.post("/api/shot-cut", json=shotcut_body(srt="garbage"))
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["type"] == "srt"
+
+
+@pytest.mark.parametrize("bad_shift", [-1, 2001, 1.5, True, False, "500", None])
+def test_api_shot_cut_rejects_bad_max_shift(bad_shift):
+    resp = client.post(
+        "/api/shot-cut", json=shotcut_body(max_shift_ms=bad_shift)
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["field"] == "max_shift_ms"
+
+
+@pytest.mark.parametrize("bad_gap", [-1, 1.5, True, False, "0", None])
+def test_api_shot_cut_rejects_bad_min_gap(bad_gap):
+    resp = client.post("/api/shot-cut", json=shotcut_body(min_gap_ms=bad_gap))
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["field"] == "min_gap_ms"
+
+
+@pytest.mark.parametrize("bad_cut", [-1, 1.5, True, "100", None])
+def test_api_shot_cut_rejects_bad_cut_point(bad_cut):
+    resp = client.post(
+        "/api/shot-cut", json=shotcut_body(cut_points_ms=[bad_cut])
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["field"] == "cut_points_ms"
+
+
+def test_api_shot_cut_validation_messages():
+    resp = client.post(
+        "/api/shot-cut", json=shotcut_body(max_shift_ms=2001)
+    )
+    assert resp.json()["detail"]["message"] == "最大挪动量（毫秒）不能大于 2000。"
+
+    resp = client.post(
+        "/api/shot-cut", json=shotcut_body(cut_points_ms=[-3])
+    )
+    message = resp.json()["detail"]["message"]
+    assert "镜头切点" in message
+    assert "不能小于 0" in message
+
+
+def test_api_shot_cut_requires_fields():
+    assert client.post("/api/shot-cut", json={}).status_code == 422
+    assert client.post(
+        "/api/shot-cut", json={"srt": SHOTCUT_SRT}
+    ).status_code == 422
+    assert client.post(
+        "/api/shot-cut",
+        json={"cut_points_ms": [], "max_shift_ms": 500, "min_gap_ms": 0},
+    ).status_code == 422

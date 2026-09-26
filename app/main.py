@@ -33,6 +33,7 @@ from .placement import (
 from . import linewrap, terms as terms_lib
 from .reading_load import find_reading_zones
 from .selection import SelectionError, select_cues
+from .shotcut import ShotCutError, plan_avoidance
 from .srt import Cue, SrtParseError, format_srt, parse_document, parse_srt, rewrite_srt
 from .timecode import format_signed_timecode, format_timecode
 from .topic_clip import (
@@ -45,15 +46,16 @@ from .topic_clip import (
 STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(
-    title="字幕校正、位置规划、专名统一、阅读负荷、智能断行、章节规划、择优保留、主题片段检索、双语配对与删段接轴工具",
+    title="字幕校正、位置规划、专名统一、阅读负荷、智能断行、章节规划、择优保留、主题片段检索、双语配对、删段接轴与镜头切点避让工具",
     description="粘贴 SRT 后可做时间漂移校正、按画面遮挡时段规划字幕上下位置、"
     "统一专名别名、分析重叠字幕叠加后的阅读负荷热区、按列数 / 行数限制智能断行、"
     "按章节数与优选停顿把整段字幕切成时长均衡的连续章节、"
     "按优先级与最小间隔从重叠字幕中择优保留必须保留条目、"
     "按多组关键词检索覆盖所需字幕条数的最短连续字幕片段、"
     "把左右两份字幕按时间跨度做 1:1 / 1:2 / 2:1 单调配对，"
-    "或按若干删除区间裁切字幕、拆分跨区间条目并按累计删除时长前移接轴。",
-    version="1.9.0",
+    "按若干删除区间裁切字幕、拆分跨区间条目并按累计删除时长前移接轴，"
+    "或在最大挪动量内平移字幕使镜头切点不落在字幕内部。",
+    version="1.10.0",
 )
 
 _FIELD_LABELS = {
@@ -74,6 +76,8 @@ _FIELD_LABELS = {
     "left_srt": "左侧 SRT 内容",
     "right_srt": "右侧 SRT 内容",
     "cuts": "删除区间",
+    "cut_points_ms": "镜头切点（毫秒）",
+    "max_shift_ms": "最大挪动量（毫秒）",
 }
 
 
@@ -89,6 +93,9 @@ async def validation_exception_handler(
     for err in exc.errors():
         loc = err.get("loc") or ()
         field = loc[-1] if loc else None
+        if isinstance(field, int) and len(loc) >= 2:
+            # 列表元素的 loc 末位是下标，取上一层字段名（如 cut_points_ms）
+            field = loc[-2]
         label = _FIELD_LABELS.get(str(field), "请求参数")
         value = err.get("input")
         if isinstance(value, float) and not math.isfinite(value):
@@ -109,6 +116,9 @@ async def validation_exception_handler(
                 message = f"{label}必须为正整数（不小于 1）。"
             else:
                 message = f"{label}不能小于 0。"
+        elif err.get("type") == "less_than_equal":
+            limit = err.get("ctx", {}).get("le")
+            message = f"{label}不能大于 {limit}。"
         elif err.get("type") == "too_short":
             message = f"{label}至少需要 {err.get('ctx', {}).get('min_length', 1)} 组。"
         elif err.get("type") == "too_long":
@@ -543,6 +553,44 @@ class CutRejoinResponse(BaseModel):
     mapping: list[CutMappingView]
 
 
+class ShotCutRequest(BaseModel):
+    srt: str = Field(..., description="原始 SRT 内容")
+    cut_points_ms: list[Annotated[StrictInt, Field(ge=0)]] = Field(
+        default_factory=list,
+        description="镜头切点（非负整数毫秒），按集合生效，自动排序去重",
+    )
+    max_shift_ms: StrictInt = Field(
+        ..., ge=0, le=2000, description="每条字幕起点允许的最大挪动量（0～2000 毫秒）"
+    )
+    min_gap_ms: StrictInt = Field(
+        ..., ge=0, description="相邻字幕的最小间隔（非负整数毫秒）"
+    )
+
+
+class ShotCutCueView(BaseModel):
+    cue_order: int
+    index: str
+    original_start: str
+    original_end: str
+    new_start: str
+    new_end: str
+    offset_ms: int
+    text: str
+
+
+class ShotCutResponse(BaseModel):
+    feasible: bool
+    cue_count: int
+    cut_points_ms: list[int]
+    max_shift_ms: int
+    min_gap_ms: int
+    first_unschedulable_cue_order: int | None
+    total_shift_ms: int
+    moved_count: int
+    adjusted_srt: str
+    cues: list[ShotCutCueView]
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -596,6 +644,11 @@ def selection_page() -> FileResponse:
 @app.get("/cut-rejoin")
 def cut_rejoin_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "cut_rejoin.html")
+
+
+@app.get("/shot-cut")
+def shot_cut_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "shot_cut.html")
 
 
 @app.post("/api/correct", response_model=CorrectResponse)
@@ -1225,4 +1278,80 @@ def cut_rejoin(req: CutRejoinRequest) -> CutRejoinResponse | JSONResponse:
         segment_count=len(out_cues),
         cues=cue_views,
         mapping=mapping_views,
+    )
+
+
+@app.post("/api/shot-cut", response_model=ShotCutResponse)
+def shot_cut(req: ShotCutRequest) -> ShotCutResponse | JSONResponse:
+    # 1. 复用现有 SRT 解析器
+    try:
+        cues = parse_srt(req.srt)
+    except SrtParseError as exc:
+        raise HTTPException(status_code=422, detail={"type": "srt", "message": str(exc)})
+
+    # 2. 动态规划避让：每条字幕时长不变，只在原起点前后 max_shift_ms 内按整毫秒
+    #    平移；切点不得落在字幕内部，相邻字幕满足最小间隔；总挪动量最小，
+    #    同分取新起点序列字典序最小（max_shift_ms / min_gap_ms 由 StrictInt
+    #    与 ge/le 校验保证为 0～2000 / 非负整数）
+    try:
+        plan = plan_avoidance(
+            cues, req.cut_points_ms, req.max_shift_ms, req.min_gap_ms
+        )
+    except ShotCutError as exc:
+        raise HTTPException(
+            status_code=422, detail={"type": "shotcut", "message": str(exc)}
+        )
+
+    cuts = sorted(set(req.cut_points_ms))
+    if not plan.feasible:
+        # 无解：HTTP 200 + feasible=false，指出最先无法继续安排的字幕输入序号
+        return ShotCutResponse(
+            feasible=False,
+            cue_count=len(cues),
+            cut_points_ms=cuts,
+            max_shift_ms=req.max_shift_ms,
+            min_gap_ms=req.min_gap_ms,
+            first_unschedulable_cue_order=plan.first_unschedulable_order,
+            total_shift_ms=0,
+            moved_count=0,
+            adjusted_srt="",
+            cues=[],
+        )
+
+    # 3. 无损重写：只替换各时间轴行的起止时间码；序号、正文、箭头空格、
+    #    X1:/X2: 等定位参数、空行、原有换行及开头 BOM 全部保持原样
+    new_ranges = [
+        (new_start, new_start + (cue.end - cue.start))
+        for cue, new_start in zip(cues, plan.starts)
+    ]
+    try:
+        adjusted_srt = rewrite_srt(req.srt, new_ranges)
+    except SrtParseError as exc:
+        raise HTTPException(status_code=422, detail={"type": "srt", "message": str(exc)})
+
+    cue_views = [
+        ShotCutCueView(
+            cue_order=pos + 1,
+            index=cue.index,
+            original_start=format_timecode(cue.start),
+            original_end=format_timecode(cue.end),
+            new_start=format_timecode(new_start),
+            new_end=format_timecode(new_start + (cue.end - cue.start)),
+            offset_ms=new_start - cue.start,
+            text=cue.text,
+        )
+        for pos, (cue, new_start) in enumerate(zip(cues, plan.starts))
+    ]
+
+    return ShotCutResponse(
+        feasible=True,
+        cue_count=len(cues),
+        cut_points_ms=cuts,
+        max_shift_ms=req.max_shift_ms,
+        min_gap_ms=req.min_gap_ms,
+        first_unschedulable_cue_order=None,
+        total_shift_ms=plan.total_shift_ms,
+        moved_count=sum(1 for v in cue_views if v.offset_ms != 0),
+        adjusted_srt=adjusted_srt,
+        cues=cue_views,
     )
